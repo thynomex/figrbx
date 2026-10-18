@@ -2,7 +2,7 @@
   "name": "figrbx",
   "private": true,
   "version": "0.1.0",
-  "description": "Open-source Figma to Roblox Studio UI importer",
+  "description": "Free, open-source Figma to Roblox Studio UI converter, with a Figma plugin and a Studio plugin.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -24,5 +24,23 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "typescript": "^5.7.3"
-  }
+  },
+  "homepage": "https://github.com/thynomex/figrbx#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thynomex/figrbx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thynomex/figrbx/issues"
+  },
+  "keywords": [
+    "figma",
+    "roblox",
+    "roblox-studio",
+    "ui",
+    "converter",
+    "figma-plugin",
+    "rojo",
+    "luau"
+  ]
 }

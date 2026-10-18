@@ -9,3 +9,6 @@ figma-plugin/plugin.zip
 Thumbs.db
 *.log
 tests/behaviors/generated_controller.luau
+
+# Local design exploration, not part of the plugin
+figrbx-plugin-panel.html

@@ -1,14 +1,29 @@
 # figrbx
 
-Turn a Figma frame into native Roblox Studio UI.
+**A free, open-source Figma → Roblox Studio UI converter.**
 
-Select a frame in Figma, press **Export**, paste the six-character code into the
-Studio plugin, and the design is rebuilt as `Frame`, `TextLabel`, `TextButton`,
-`ScrollingFrame` and `CanvasGroup` instances with `UICorner`, `UIStroke` and
-`UIGradient` attached, sized in Scale so the layout holds on other screens.
+figrbx ships both halves of the workflow: a **Figma plugin** that reads your
+frame, and a **Roblox Studio plugin** that rebuilds it as native GUI instances.
+Select a frame, press Export, paste the six-character code in Studio, and the
+design arrives as `Frame`, `TextLabel`, `TextButton`, `ScrollingFrame` and
+`CanvasGroup` instances with `UICorner`, `UIStroke` and `UIGradient` attached,
+sized in Scale so the layout holds on screens you did not design for.
 
-figrbx is an independent, MIT-licensed project. It is not affiliated with,
-endorsed by, or derived from Framewisp, Figma, or Roblox.
+It is an alternative to paid converters, with no subscription, no account, and
+no server of ours in the middle: the converter runs on your machine and images
+upload to your own Roblox account.
+
+- **Free and MIT licensed** — fork it, modify it, ship it.
+- **No API keys required to try it** — designs without images convert with no
+  Roblox credentials at all.
+- **Nothing leaves your machine** except the images you choose to upload.
+- **Every approximation is reported** — nothing is silently dropped.
+
+figrbx is an independent project. It is not affiliated with, endorsed by, or
+sponsored by Framewisp, Figma, or Roblox. All product names are used only to
+describe what this software interoperates with.
+
+![The figrbx plugin panel, showing a completed export with three reported approximations](docs/plugin-panel.png)
 
 ## How it fits together
 

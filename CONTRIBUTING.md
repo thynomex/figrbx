@@ -4,10 +4,6 @@ Thanks for helping. A few things make changes easier to review.
 
 ## Ground rules
 
-- This project is a clean-room implementation. Do not submit code, assets, or
-  copy derived from another Figma-to-Roblox product, decompiled plugin source,
-  or a website mirror. If behaviour needs to match, describe it in an issue and
-  implement it from the public Roblox and Figma APIs.
 - Keep the converter data-only. The Figma plugin serializes; `packages/core`
   converts; the Studio plugin instantiates. No layer may execute document
   content.
