@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0d0b12;
+    --panel: #16131e;
+    --panel-2: #1d1929;
+    --line: #2d2740;
+    --text: #efecf6;
+    --muted: #8e86a3;
+    --accent: #8b5cf6;
+    --accent-strong: #6d3ff2;
+    --good: #4ade80;
+    --bad: #f87171;
+    --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+    --sans: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 12px; }
+  body { padding: 16px; display: flex; flex-direction: column; gap: 14px; min-height: 100vh; }
+  h1 { font-size: 14px; letter-spacing: 0.22em; text-transform: uppercase; margin: 0; }
+  h2 { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .brand small { color: var(--muted); font-size: 11px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  label { display: block; font-size: 11px; color: var(--muted); margin: 0 0 5px; }
+  input, select {
+    width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px; font-family: var(--sans); outline: none;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > * { flex: 1; }
+  .row > .shrink { flex: 0 0 auto; }
+  .field { margin-bottom: 10px; }
+  .field:last-child { margin-bottom: 0; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-family: var(--sans);
+    transition: border-color 0.15s ease, transform 0.1s ease, background 0.15s ease;
+  }
+  button:hover { border-color: var(--accent); }
+  button:active { transform: scale(0.98); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.primary {
+    background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+    border-color: transparent; font-weight: 600;
+  }
+  button.primary:hover { filter: brightness(1.08); }
+  .status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+  .dot.on { background: var(--good); box-shadow: 0 0 8px rgba(74, 222, 128, 0.5); }
+  .dot.off { background: var(--bad); }
+  .selection { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .selection strong { color: var(--text); font-weight: 500; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; }
+  .actions button { flex: 1; }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; margin-top: 10px; }
+  .check input { width: auto; }
+  #log { font-family: var(--mono); font-size: 10.5px; line-height: 1.5; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 84px; overflow-y: auto; }
+  #result { display: none; }
+  #result.on { display: block; }
+  .code {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: var(--panel-2); border: 1px dashed var(--line); border-radius: 10px; padding: 12px 14px;
+  }
+  .code b { font-family: var(--mono); font-size: 24px; letter-spacing: 0.34em; }
+  .hint { color: var(--muted); font-size: 11px; line-height: 1.55; margin: 8px 0 0; }
+  .warn-list { margin: 10px 0 0; padding: 0; list-style: none; max-height: 90px; overflow-y: auto; }
+  .warn-list li { color: #c4b5fd; font-size: 11px; line-height: 1.45; padding: 3px 0; border-bottom: 1px solid rgba(45, 39, 64, 0.5); }
+  .warn-list li:last-child { border-bottom: none; }
+  .error { color: var(--bad); font-size: 11.5px; line-height: 1.5; }
+  .spacer { flex: 1; }
+  .foot { color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+  a { color: #c4b5fd; }
+</style>
+</head>
+<body>
+  <div class="brand">
+    <h1>figrbx</h1>
+    <small>Figma → Roblox Studio</small>
+  </div>
+
+  <div class="card">
+    <h2>Bridge</h2>
+    <div class="field">
+      <label for="bridgeUrl">Local bridge URL</label>
+      <input id="bridgeUrl" spellcheck="false" placeholder="http://127.0.0.1:17341" />
+    </div>
+    <div class="field">
+      <label for="token">Bridge token</label>
+      <input id="token" type="password" spellcheck="false" placeholder="Printed when the bridge starts" />
+    </div>
+    <div class="row">
+      <div class="status"><span class="dot" id="bridgeDot"></span><span id="bridgeStatus">Not checked</span></div>
+      <button class="shrink" id="testBtn">Test</button>
+      <button class="shrink" id="connectBtn" style="display:none">Connect Roblox</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Export</h2>
+    <div class="field">
+      <label>Selection</label>
+      <div class="selection" id="selection">Nothing selected</div>
+    </div>
+    <div class="field">
+      <label for="textMode">Text handling</label>
+      <select id="textMode">
+        <option value="auto">Auto — bake only unknown fonts</option>
+        <option value="live">Live — always editable text</option>
+        <option value="exact">Exact — bake fonts Roblox cannot match</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button class="primary" id="exportBtn">Export to Studio</button>
+      <button id="downloadBtn">Download JSON</button>
+    </div>
+    <label class="check"><input type="checkbox" id="liveSync" /> Live sync while this window is open</label>
+  </div>
+
+  <div class="card">
+    <h2>Activity</h2>
+    <div id="log">Ready.</div>
+    <div id="error" class="error" style="display:none"></div>
+  </div>
+
+  <div class="card" id="result">
+    <h2>Transfer code</h2>
+    <div class="code">
+      <b id="code">------</b>
+      <button class="shrink" id="copyBtn">Copy</button>
+    </div>
+    <p class="hint">Open Roblox Studio, press the figrbx button, and paste this code.</p>
+    <ul class="warn-list" id="warnings"></ul>
+  </div>
+
+  <div class="spacer"></div>
+  <div class="foot">Everything stays on this machine. The bridge uploads images to your own Roblox account.</div>
+
+  <script>/*__UI_SCRIPT__*/</script>
+</body>
+</html>

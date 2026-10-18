@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+studio-plugin/figrbx.rbxm
+figma-plugin/plugin.zip
+.DS_Store
+Thumbs.db
+*.log
+tests/behaviors/generated_controller.luau

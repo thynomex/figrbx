@@ -1,0 +1,31 @@
+{
+  "name": "@figrbx/bridge",
+  "version": "0.1.0",
+  "description": "Local bridge between the figrbx Figma plugin and Roblox Studio",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "figrbx": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsup src/cli.ts src/server.ts src/index.ts --format esm --dts --clean --tsconfig tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx watch src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@figrbx/core": "workspace:*",
+    "hono": "^4.6.14",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

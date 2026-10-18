@@ -1,0 +1,4 @@
+std = "roblox"
+
+[config]
+# Generated controllers are checked as part of the test suite.
