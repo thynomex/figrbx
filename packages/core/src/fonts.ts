@@ -218,7 +218,13 @@ export function resolveFont(family: string, style = 'Regular'): FontMatch {
     robloxFont,
     known: true,
     exact: rule.exact && (familySingleCut || styleExact),
-    note: rule.exact && !styleExact ? `Style "${style}" approximated` : undefined,
+    // Any substitution is an approximation worth reporting: either the family
+    // is not a Roblox font, or the family is but this cut of it is not.
+    note: !rule.exact
+      ? `Substituted "${family}"`
+      : !styleExact && !familySingleCut
+        ? `Style "${style}" approximated`
+        : undefined,
   };
 }
 

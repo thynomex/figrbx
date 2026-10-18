@@ -423,12 +423,13 @@ function addCorner(node: OdtNode, children: RbxNode[], ctx: Ctx): void {
 
 function addText(
   node: OdtNode,
-  parsed: ParsedName,
   props: Record<string, RbxValue>,
   ctx: Ctx,
+  match: FontMatch,
+  /** The caller already explained the font substitution; do not repeat it. */
+  fontNoteSuppressed: boolean,
 ): void {
   const text = node.text!;
-  const match: FontMatch = resolveFont(text.fontFamily, text.fontStyle);
   const characters = applyTextCase(text);
 
   props.Text = propString(characters);
@@ -443,11 +444,8 @@ function addText(
 
   // Text keeps the authored placeholders (`{Coins}`) until the controller
   // binds live values; that makes a missing attribute visible in Studio
-  // instead of silently rendering an empty label.
-  if (parsed.bindings.length > 0) {
-    props.Text = propString(characters);
-  }
-  if (!match.exact && match.note) {
+  // instead of silently rendering an empty label. Nothing to rewrite here.
+  if (!fontNoteSuppressed && !match.exact && match.note) {
     ctx.warnings.push(`"${node.rawName}": ${match.note} — using ${match.robloxFont}`);
   }
 }
@@ -495,12 +493,15 @@ function convertTextNode(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode {
   }
 
   if (bake) {
+    // The mode asked for this layer to be an image, but the exporter did not
+    // include one. Say what will actually appear, and what fixes it.
+    const modeName = ctx.doc.options.textMode === 'exact' ? 'Exact' : 'Auto';
     ctx.warnings.push(
-      `Baking requested for "${node.rawName}" but no rasterized layer was supplied`,
+      `"${node.rawName}": ${modeName} mode wants "${node.text!.fontFamily}" baked, but this export has no image for it — kept as live text in ${match.robloxFont}. Re-export from Figma to rasterize it.`,
     );
   }
 
-  addText(node, parsed, props, ctx);
+  addText(node, props, ctx, match, bake);
   if (node.opacity !== undefined && node.opacity < 1) {
     props.TextTransparency = propNumber(1 - clamp01(node.opacity));
   }

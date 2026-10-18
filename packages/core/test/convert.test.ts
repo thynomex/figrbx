@@ -214,6 +214,55 @@ describe('convertDocument', () => {
     expect(root.children[0]!.children[0]!.props.Visible).toEqual({ t: 'boolean', v: false });
   });
 
+  it('explains a bake that had no image rather than dropping the layer', () => {
+    const label = node({
+      id: 'label',
+      rawName: 'Title',
+      type: 'TEXT',
+      text: {
+        characters: 'Build faster',
+        fontSize: 64,
+        fontFamily: 'Sohne Buch',
+        fontStyle: 'Bold',
+        alignH: 'LEFT',
+        alignV: 'TOP',
+      },
+    });
+    const result = convertDocument(doc(node({ id: 'root', children: [label] })));
+
+    // One warning, not two: the substitution and the missing raster are the
+    // same fact from the reader's point of view.
+    expect(result.warnings).toHaveLength(1);
+    const warning = result.warnings[0]!;
+    expect(warning).toContain('Auto mode wants "Sohne Buch" baked');
+    expect(warning).toContain('GothamBold');
+    expect(warning).toContain('Re-export');
+    expect(find(result.screenGui, 'TextLabel').props.Text).toEqual({
+      t: 'string',
+      v: 'Build faster',
+    });
+  });
+
+  it('reports a substituted font exactly once', () => {
+    const label = node({
+      id: 'label',
+      rawName: 'Headline',
+      type: 'TEXT',
+      text: {
+        characters: 'Hello',
+        fontSize: 32,
+        fontFamily: 'Inter',
+        fontStyle: 'Bold',
+        alignH: 'LEFT',
+        alignV: 'TOP',
+      },
+    });
+    const result = convertDocument(doc(node({ id: 'root', children: [label] })));
+    const fontWarnings = result.warnings.filter((warning) => warning.includes('Headline'));
+    expect(fontWarnings).toHaveLength(1);
+    expect(fontWarnings[0]).toContain('Substituted "Inter"');
+  });
+
   it('warns about unsupported effects', () => {
     const card = node({
       id: 'card',
