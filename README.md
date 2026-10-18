@@ -176,6 +176,11 @@ The Figma plugin offers three modes:
 
 Baked layers become `ImageLabel`s at 2× scale.
 
+## Roadmap
+
+figrbx is early. `docs/roadmap.md` records what is supported today, what is
+missing, and the order it will be built in.
+
 ## Repository layout
 
 ```
