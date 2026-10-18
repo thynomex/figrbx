@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Config, StoredTokens } from './config.js';
-import { hasApiKey, hasOAuth, redirectUri, writeConfig } from './config.js';
+import { hasApiKey, hasOAuth, configPath, redirectUri, writeConfig } from './config.js';
 
 const AUTHORIZE_URL = 'https://apis.roblox.com/oauth/v1/authorize';
 const TOKEN_URL = 'https://apis.roblox.com/oauth/v1/token';
@@ -93,7 +93,15 @@ export class RobloxAuth {
   start(): { url: string } {
     if (!hasOAuth(this.config)) {
       throw new AuthError(
-        'No OAuth client configured. Register an app at https://create.roblox.com/dashboard/credentials and set FIGRBX_CLIENT_ID.',
+        [
+          'No Roblox OAuth client is configured, so images cannot be uploaded.',
+          'Fix it one of these ways:',
+          `  1. Register an app at https://create.roblox.com/dashboard/credentials (category "Creation & Productivity Tools", scopes asset:read and asset:write, redirect URI ${redirectUri(this.config.port)}), then put its client id and secret in "oauth" inside ${configPath()} and restart the bridge.`,
+          '  2. Or set FIGRBX_CLIENT_ID and FIGRBX_CLIENT_SECRET before starting the bridge.',
+          '  3. Or skip OAuth entirely with an Open Cloud key: FIGRBX_API_KEY plus FIGRBX_USER_ID.',
+          'Designs with no images still export without any of this.',
+        ].join('\n'),
+        400,
       );
     }
     const { verifier, challenge } = createPkce();
