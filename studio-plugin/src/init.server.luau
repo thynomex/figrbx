@@ -9,7 +9,7 @@ local Http = require(script.http)
 local Ui = require(script.ui)
 local Materialize = require(script.materialize)
 
-local DEFAULT_BRIDGE = "http://127.0.0.1:17341"
+local DEFAULT_BRIDGE = "http://localhost:17341"
 
 local toolbar = plugin:CreateToolbar("figrbx")
 local toolbarButton = toolbar:CreateButton("figrbx", "Import a Figma frame", "")

@@ -21,7 +21,7 @@ Figma plugin (TypeScript)        Local bridge (Node)                 Studio plug
 └───────────────────────┘        └───────────────────────┘           └───────────────────┘
 ```
 
-Everything runs on your machine. The bridge binds to `127.0.0.1` and talks to
+Everything runs on your machine. The bridge binds to `localhost` and talks to
 Roblox only when you import images into your own account.
 
 A static path also exists: **Download JSON** in the Figma plugin produces a

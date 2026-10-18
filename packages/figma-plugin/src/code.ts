@@ -40,7 +40,7 @@ type ExportPayload = {
 };
 
 const DEFAULT_SETTINGS: Settings = {
-  bridgeUrl: 'http://127.0.0.1:17341',
+  bridgeUrl: 'http://localhost:17341',
   token: '',
   textMode: 'auto',
   liveSync: false,
@@ -71,6 +71,11 @@ async function boot(): Promise<void> {
     | Partial<Settings>
     | undefined;
   settings = { ...DEFAULT_SETTINGS, ...stored };
+  if (settings.liveSync) {
+    // Restore the watcher only if the user had it on; failure is reported to
+    // the UI rather than thrown out of boot.
+    await applyLiveSync(true);
+  }
   const selection = figma.currentPage.selection;
   post({
     type: 'boot',
@@ -719,7 +724,10 @@ figma.ui.onmessage = async (message: any) => {
     if (!message || typeof message.type !== 'string') return;
 
     if (message.type === 'save-settings') {
-      settings = { ...settings, ...message.settings };
+      // liveSync is owned by set-live-sync: persisting it here would record a
+      // watcher that was never registered.
+      const { liveSync: _ignored, ...rest } = message.settings ?? {};
+      settings = { ...settings, ...rest };
       await figma.clientStorage.setAsync('figrbx-settings', settings);
       post({ type: 'settings-saved', settings });
       return;
@@ -731,8 +739,10 @@ figma.ui.onmessage = async (message: any) => {
     }
 
     if (message.type === 'set-live-sync') {
-      settings.liveSync = Boolean(message.enabled);
-      await figma.clientStorage.setAsync('figrbx-settings', settings);
+      await applyLiveSync(Boolean(message.enabled));
+      if (!settings.liveSync) {
+        post({ type: 'live-sync-rejected' });
+      }
       return;
     }
 
@@ -754,13 +764,66 @@ figma.on('selectionchange', () => {
   });
 });
 
-figma.on('documentchange', () => {
+/*
+ * Live sync listens for document edits, and Figma refuses that registration in
+ * dynamic-page mode until every page is loaded. Loading all pages is expensive
+ * on a large file, so it happens only when the user turns live sync on — never
+ * at plugin start.
+ */
+let liveSyncRegistered = false;
+
+function onDocumentChange(): void {
   if (!settings.liveSync) return;
   if (liveSyncTimer) clearTimeout(liveSyncTimer);
   liveSyncTimer = setTimeout(() => {
     liveSyncTimer = null;
     post({ type: 'document-changed' });
   }, 700);
-});
+}
+
+async function enableLiveSync(): Promise<boolean> {
+  if (liveSyncRegistered) return true;
+  try {
+    await figma.loadAllPagesAsync();
+  } catch (error) {
+    post({
+      type: 'live-sync-failed',
+      message: `Could not watch this file for changes: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+    return false;
+  }
+  figma.on('documentchange', onDocumentChange);
+  liveSyncRegistered = true;
+  return true;
+}
+
+function disableLiveSync(): void {
+  if (!liveSyncRegistered) return;
+  figma.off('documentchange', onDocumentChange);
+  liveSyncRegistered = false;
+  if (liveSyncTimer) {
+    clearTimeout(liveSyncTimer);
+    liveSyncTimer = null;
+  }
+}
+
+async function applyLiveSync(enabled: boolean): Promise<void> {
+  settings.liveSync = enabled;
+  await figma.clientStorage.setAsync('figrbx-settings', settings);
+  if (enabled) {
+    const ok = await enableLiveSync();
+    if (!ok) {
+      // Registration failed; leave the setting off so the UI does not claim a
+      // watcher that is not running.
+      settings.liveSync = false;
+      await figma.clientStorage.setAsync('figrbx-settings', settings);
+      post({ type: 'settings-saved', settings });
+    }
+  } else {
+    disableLiveSync();
+  }
+}
 
 boot().catch((error) => fail(error instanceof Error ? error.message : String(error)));

@@ -49,6 +49,19 @@ export function createApp(deps: ServerDeps): Hono {
     await next();
   });
 
+  // Request log. Both plugins are silent clients, so without this a mistyped
+  // token looks identical to a plugin that never reached the bridge.
+  app.use('*', async (c, next) => {
+    const started = Date.now();
+    await next();
+    if (c.req.path === '/' || c.req.path === '/favicon.ico') return;
+    const status = c.res.status;
+    const mark = status >= 500 ? '!!' : status >= 400 ? ' !' : ' ·';
+    console.log(
+      `${mark} ${c.req.method.padEnd(6)} ${c.req.path} ${status} ${Date.now() - started}ms`,
+    );
+  });
+
   app.use('*', async (c, next) => {
     const length = Number(c.req.header('content-length') ?? 0);
     if (length > MAX_BODY_BYTES) {

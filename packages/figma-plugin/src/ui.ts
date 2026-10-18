@@ -42,7 +42,7 @@ type LogEntry = { t: string; msg: string; tone: LogTone };
 type Selection = { name: string; type: string; width: number; height: number };
 
 const DEFAULT_SETTINGS: Settings = {
-  bridgeUrl: 'http://127.0.0.1:17341',
+  bridgeUrl: 'http://localhost:17341',
   token: '',
   textMode: 'auto',
   liveSync: false,
@@ -332,8 +332,10 @@ function focusResult(): void {
 function saveSettings(): void {
   settings.bridgeUrl = normalizeBase(bridgeUrl.value);
   settings.token = bridgeToken.value.trim();
-  settings.liveSync = liveSyncInput.checked;
-  parent.postMessage({ pluginMessage: { type: 'save-settings', settings } }, '*');
+  // liveSync travels through set-live-sync so the sandbox can load pages and
+  // register the change watcher in one step.
+  const { liveSync: _liveSync, ...rest } = settings;
+  parent.postMessage({ pluginMessage: { type: 'save-settings', settings: rest } }, '*');
 }
 
 function applySettings(next: Partial<Settings>): void {
@@ -715,6 +717,24 @@ window.onmessage = (event: MessageEvent) => {
         { t: '·', msg: 'nothing was written to Studio', tone: 'dim' },
       ]);
       renderExport();
+      return;
+
+    case 'live-sync-rejected':
+    case 'live-sync-failed':
+      settings.liveSync = false;
+      liveSyncInput.checked = false;
+      renderExport();
+      setLog([
+        {
+          t: '!',
+          msg:
+            message.type === 'live-sync-failed'
+              ? String(message.message ?? 'Live sync could not start')
+              : 'Live sync could not start in this file',
+          tone: 'err',
+        },
+        { t: '·', msg: 'exporting still works normally', tone: 'dim' },
+      ]);
       return;
 
     case 'document-changed':

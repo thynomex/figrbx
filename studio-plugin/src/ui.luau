@@ -178,7 +178,7 @@ function Ui.create(widget: DockWidgetPluginGui, callbacks: Callbacks, initial: {
 	-- Bridge
 	local bridgeCard = card(root, 2, 140, 6)
 	titleLabel(bridgeCard, "Bridge", 1)
-	local urlBox = textBox(bridgeCard, 2, "http://127.0.0.1:17341", initial.bridgeUrl)
+	local urlBox = textBox(bridgeCard, 2, "http://localhost:17341", initial.bridgeUrl)
 	local tokenBox = textBox(bridgeCard, 3, "Bridge token", initial.token)
 	local bridgeRow = row(bridgeCard, 4, 26)
 	local testButton = Instance.new("TextButton")

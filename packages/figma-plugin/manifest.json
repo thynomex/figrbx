@@ -7,8 +7,8 @@
   "editorType": ["figma"],
   "documentAccess": "dynamic-page",
   "networkAccess": {
-    "allowedDomains": ["http://localhost:17341", "http://127.0.0.1:17341"],
+    "allowedDomains": ["http://localhost:17341"],
     "reasoning": "The plugin talks to the figrbx bridge, a service the user runs on their own machine, to convert the selected frame and upload images to the user's Roblox account. No third-party servers are contacted.",
-    "devAllowedDomains": ["http://localhost:17341", "http://127.0.0.1:17341"]
+    "devAllowedDomains": ["http://localhost:17341"]
   }
 }
