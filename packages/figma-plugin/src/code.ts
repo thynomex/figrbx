@@ -46,6 +46,8 @@ const DEFAULT_SETTINGS: Settings = {
   liveSync: false,
 };
 
+const PLUGIN_VERSION = '0.1.0';
+
 const MAX_NODES = 5000;
 const MAX_IMAGES = 1000;
 
@@ -76,6 +78,7 @@ async function boot(): Promise<void> {
     selection: selection.length === 1 ? describeSelection(selection[0]!) : null,
     selectionCount: selection.length,
     filename: figma.root.name,
+    version: PLUGIN_VERSION,
   });
 }
 

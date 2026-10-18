@@ -2,144 +2,1251 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>figrbx · plugin panel</title>
 <style>
   :root {
-    --bg: #0d0b12;
-    --panel: #16131e;
-    --panel-2: #1d1929;
-    --line: #2d2740;
-    --text: #efecf6;
-    --muted: #8e86a3;
-    --accent: #8b5cf6;
-    --accent-strong: #6d3ff2;
-    --good: #4ade80;
-    --bad: #f87171;
-    --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
-    --sans: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --bg: #060A0F;
+    --stage: #03060A;
+    --surface: #0C121A;
+    --surface-2: #101822;
+    --field: #04080D;
+    --fg: #E9F0F7;
+    --muted: #8394A8;
+    --border: #1B2634;
+    --border-strong: #263446;
+    --accent: #34B4F7;
+    --accent-2: #1E82DC;
+    --accent-ink: color-mix(in oklch, var(--accent) 58%, white);
+    --accent-soft: color-mix(in oklch, var(--accent) 13%, transparent);
+    --accent-line: color-mix(in oklch, var(--accent) 27%, transparent);
+    --ok: #4ADE9F;
+    --warn: #E7B04D;
+    --err: #FF8290;
+    --on-accent: #04131E;
+    --fg-soft: color-mix(in oklch, var(--fg) 6%, transparent);
+
+    --glass-shell: oklch(0.150 0.016 245 / 0.68);
+    --glass-card: oklch(0.305 0.024 244 / 0.32);
+    --glass-well: oklch(0.090 0.012 245 / 0.60);
+    --edge: oklch(1 0 0 / 0.10);
+    --edge-soft: oklch(1 0 0 / 0.052);
+    --edge-lit: oklch(1 0 0 / 0.19);
+    --glint: oklch(1 0 0 / 0.06);
+    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+    --radius: 11px;
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-io: cubic-bezier(0.45, 0, 0.22, 1);
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 12px; }
-  body { padding: 16px; display: flex; flex-direction: column; gap: 14px; min-height: 100vh; }
-  h1 { font-size: 14px; letter-spacing: 0.22em; text-transform: uppercase; margin: 0; }
-  h2 { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
-  .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  .brand small { color: var(--muted); font-size: 11px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
-  label { display: block; font-size: 11px; color: var(--muted); margin: 0 0 5px; }
-  input, select {
-    width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-    border-radius: 8px; padding: 8px 10px; font-size: 12px; font-family: var(--sans); outline: none;
+
+  *, *::before, *::after { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  html, body { height: 100%; }
+  body {
+    position: relative;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background:
+      radial-gradient(58% 42% at 22% -4%, oklch(0.34 0.095 240 / 0.44), transparent 68%),
+      radial-gradient(46% 36% at 84% 18%, oklch(0.30 0.085 262 / 0.30), transparent 72%),
+      radial-gradient(68% 46% at 50% 108%, oklch(0.26 0.038 205 / 0.26), transparent 70%),
+      var(--stage);
+    color: var(--fg);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
   }
-  input:focus, select:focus { border-color: var(--accent); }
-  .row { display: flex; gap: 8px; align-items: center; }
-  .row > * { flex: 1; }
-  .row > .shrink { flex: 0 0 auto; }
-  .field { margin-bottom: 10px; }
-  .field:last-child { margin-bottom: 0; }
-  button {
-    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-    border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-family: var(--sans);
-    transition: border-color 0.15s ease, transform 0.1s ease, background 0.15s ease;
+  body::before {
+    content: "";
+    position: fixed;
+    inset: -18%;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(30% 24% at 30% 24%, oklch(0.62 0.14 232 / 0.20), transparent 70%),
+      radial-gradient(26% 21% at 72% 36%, oklch(0.54 0.13 258 / 0.18), transparent 72%),
+      radial-gradient(30% 24% at 48% 84%, oklch(0.58 0.05 205 / 0.12), transparent 72%);
+    filter: blur(24px);
+    animation: aurora 30s var(--ease-io) infinite alternate;
   }
-  button:hover { border-color: var(--accent); }
-  button:active { transform: scale(0.98); }
-  button:disabled { opacity: 0.45; cursor: default; }
-  button.primary {
-    background: linear-gradient(135deg, var(--accent-strong), var(--accent));
-    border-color: transparent; font-weight: 600;
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 4;
+    pointer-events: none;
+    opacity: 0.05;
+    mix-blend-mode: overlay;
+    background-image: var(--grain);
+    background-size: 140px 140px;
   }
-  button.primary:hover { filter: brightness(1.08); }
-  .status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
-  .dot.on { background: var(--good); box-shadow: 0 0 8px rgba(74, 222, 128, 0.5); }
-  .dot.off { background: var(--bad); }
-  .selection { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .selection strong { color: var(--text); font-weight: 500; }
-  .actions { display: flex; gap: 8px; margin-top: 12px; }
-  .actions button { flex: 1; }
-  .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; margin-top: 10px; }
-  .check input { width: auto; }
-  #log { font-family: var(--mono); font-size: 10.5px; line-height: 1.5; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 84px; overflow-y: auto; }
-  #result { display: none; }
-  #result.on { display: block; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  input { font: inherit; color: inherit; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  p { margin: 0; }
+  h1, h2 { margin: 0; font-weight: inherit; }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .ico {
+    width: 13px; height: 13px;
+    display: block; flex: none;
+    fill: none; stroke: currentColor;
+    stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
+  }
+
+  .stage { position: relative; z-index: 2; width: 100%; height: 100%; display: flex; flex-direction: column; }
+
+  .panel {
+    position: relative;
+    isolation: isolate;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background-color: var(--glass-shell);
+    background-image: linear-gradient(180deg, oklch(1 0 0 / 0.045), oklch(1 0 0 / 0.008) 24%, transparent 52%);
+  }
+  .panel::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(120% 46% at 18% -8%, oklch(0.74 0.13 232 / 0.13), transparent 62%),
+      radial-gradient(70% 34% at 88% 102%, oklch(0.54 0.11 255 / 0.11), transparent 70%),
+      linear-gradient(148deg, oklch(1 0 0 / 0.055) 0%, transparent 34%);
+    mix-blend-mode: screen;
+  }
+  .panel::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: radial-gradient(300px circle at var(--mx, 50%) var(--my, 0%), oklch(1 0 0 / 0.075), transparent 66%);
+    opacity: var(--glow, 0);
+    mix-blend-mode: soft-light;
+    transition: opacity 0.5s var(--ease-out);
+  }
+
+  .aura { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+  .aura i {
+    position: absolute;
+    display: block;
+    border-radius: 50%;
+    filter: blur(40px);
+    will-change: transform;
+  }
+  .aura i:nth-child(1) {
+    width: 330px; height: 300px; left: -120px; top: -140px;
+    background: radial-gradient(circle, oklch(0.64 0.16 232 / 0.52), transparent 68%);
+    animation: driftA 24s var(--ease-io) infinite alternate;
+  }
+  .aura i:nth-child(2) {
+    width: 280px; height: 280px; right: -130px; top: 210px;
+    background: radial-gradient(circle, oklch(0.54 0.14 258 / 0.42), transparent 70%);
+    animation: driftB 29s var(--ease-io) infinite alternate;
+  }
+  .aura i:nth-child(3) {
+    width: 240px; height: 220px; left: 60px; bottom: -150px;
+    background: radial-gradient(circle, oklch(0.60 0.06 202 / 0.22), transparent 70%);
+    animation: driftA 33s var(--ease-io) infinite alternate-reverse;
+  }
+
+  .panel-head {
+    position: relative;
+    z-index: 1;
+    flex: none;
+    height: 58px;
+    padding: 0 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    border-bottom: 1px solid var(--edge-soft);
+    background: linear-gradient(180deg, oklch(1 0 0 / 0.035), transparent);
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .brand-mark {
+    position: relative;
+    width: 33px; height: 33px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    color: var(--on-accent);
+    background:
+      linear-gradient(160deg, oklch(1 0 0 / 0.28), transparent 46%),
+      linear-gradient(150deg, color-mix(in oklab, var(--accent) 78%, white) 0%, var(--accent) 46%, color-mix(in oklab, var(--accent-2) 46%, var(--accent)) 100%);
+    box-shadow:
+      inset 0 1px 0 oklch(1 0 0 / 0.48),
+      inset 0 -1px 0 oklch(0 0 0 / 0.22),
+      0 5px 18px -6px color-mix(in oklch, var(--accent) 92%, transparent);
+  }
+  .brand-mark::after {
+    content: "";
+    position: absolute;
+    inset: 3px 3px auto;
+    height: 42%;
+    border-radius: 8px 8px 60% 60%;
+    background: linear-gradient(180deg, oklch(1 0 0 / 0.24), transparent);
+    pointer-events: none;
+  }
+  .brand-mark svg { position: relative; z-index: 1; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
+  .wordmark { font-size: 18px; font-weight: 700; letter-spacing: -0.035em; line-height: 1.05; }
+  .tagline {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    line-height: 1.2;
+    letter-spacing: 0.01em;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .tagline .ico { width: 9px; height: 9px; color: var(--accent-ink); stroke-width: 1.6; }
+  .version {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+    padding: 5px 8px;
+    border: 1px solid var(--edge-soft);
+    border-radius: 8px;
+    background: linear-gradient(180deg, oklch(1 0 0 / 0.05), oklch(1 0 0 / 0.012));
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06);
+  }
+
+  .panel-body {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 8px 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--fg) 18%, transparent) transparent;
+    overscroll-behavior: contain;
+  }
+  .panel-body::-webkit-scrollbar { width: 7px; }
+  .panel-body::-webkit-scrollbar-track { background: transparent; }
+  .panel-body::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--fg) 16%, transparent); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
+  .panel-body::-webkit-scrollbar-thumb:hover { background: color-mix(in oklab, var(--fg) 26%, transparent); background-clip: padding-box; }
+
+  .card {
+    position: relative;
+    flex: none;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    padding: 11px 12px 12px;
+    background-color: var(--glass-card);
+    background-image:
+      linear-gradient(180deg, oklch(1 0 0 / 0.065), oklch(1 0 0 / 0.014) 38%, oklch(0 0 0 / 0.06) 100%);
+    -webkit-backdrop-filter: blur(22px) saturate(150%);
+    backdrop-filter: blur(22px) saturate(150%);
+    box-shadow:
+      inset 0 1px 0 oklch(1 0 0 / 0.075),
+      inset 0 0 24px -8px oklch(0.64 0.11 234 / 0.12),
+      0 14px 30px -26px oklch(0 0 0 / 0.95);
+    animation: cardIn 0.6s var(--ease-out) both;
+  }
+  .card::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 14px; right: 14px;
+    height: 1px;
+    border-radius: 1px;
+    background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.24), transparent);
+    opacity: 0.8;
+    pointer-events: none;
+  }
+  .panel-body > .card:nth-child(1) { animation-delay: 0.08s; }
+  .panel-body > .card:nth-child(2) { animation-delay: 0.14s; }
+  .panel-body > .card:nth-child(3) { animation-delay: 0.20s; }
+  .panel-body > .card:nth-child(4) { animation-delay: 0.06s; }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 22px;
+    margin-bottom: 9px;
+  }
+  .card-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .tile {
+    width: 22px; height: 22px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+    color: var(--accent-ink);
+    background:
+      linear-gradient(160deg, oklch(1 0 0 / 0.12), transparent 52%),
+      color-mix(in oklab, var(--accent) 14%, transparent);
+    border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent);
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.12);
+  }
+  .tile .ico { width: 12px; height: 12px; }
+  .card-label {
+    font-size: 11px;
+    font-weight: 650;
+    line-height: 1;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--fg) 92%, transparent);
+    white-space: nowrap;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 21px;
+    padding: 0 8px 0 7px;
+    border-radius: 999px;
+    border: 1px solid var(--edge-soft);
+    background: linear-gradient(180deg, oklch(1 0 0 / 0.055), oklch(1 0 0 / 0.015));
+    font-size: 10px;
+    font-weight: 550;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    color: var(--muted);
+    white-space: nowrap;
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05);
+  }
+  .status-pill .dot {
+    width: 6px; height: 6px;
+    flex: none;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 0 2px color-mix(in oklch, currentColor 16%, transparent);
+  }
+  .status-pill[data-tone="ok"] { color: var(--ok); background: color-mix(in oklab, var(--ok) 9%, transparent); border-color: color-mix(in oklab, var(--ok) 26%, transparent); }
+  .status-pill[data-tone="warn"] { color: var(--warn); background: color-mix(in oklab, var(--warn) 9%, transparent); border-color: color-mix(in oklab, var(--warn) 26%, transparent); }
+  .status-pill[data-tone="err"] { color: var(--err); background: color-mix(in oklab, var(--err) 8%, transparent); border-color: color-mix(in oklab, var(--err) 24%, transparent); }
+  .status-pill[data-tone="ok"] .dot { animation: pulseOk 2.8s var(--ease-out) infinite; }
+
+  .field + .field { margin-top: 6px; }
+  .field-label {
+    display: block;
+    font-size: 10.5px;
+    line-height: 1.2;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .input-wrap { position: relative; display: block; }
+  .input {
+    width: 100%;
+    height: 30px;
+    padding: 0 9px 0 28px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    letter-spacing: -0.01em;
+    color: var(--fg);
+    background: var(--glass-well);
+    border: 1px solid var(--edge-soft);
+    border-radius: 8px;
+    box-shadow:
+      inset 0 1px 2px oklch(0 0 0 / 0.32),
+      inset 0 1px 0 oklch(1 0 0 / 0.02);
+    transition: border-color 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out), background-color 0.2s var(--ease-out);
+  }
+  .input::placeholder { color: color-mix(in oklab, var(--muted) 85%, transparent); }
+  .input:hover { border-color: oklch(1 0 0 / 0.13); }
+  .input:focus {
+    outline: none;
+    border-color: color-mix(in oklab, var(--accent) 68%, white 8%);
+    background: color-mix(in oklab, var(--field) 72%, transparent);
+    box-shadow:
+      0 0 0 3px color-mix(in oklab, var(--accent) 17%, transparent),
+      0 0 20px -8px color-mix(in oklab, var(--accent) 90%, transparent),
+      inset 0 1px 2px oklch(0 0 0 / 0.3);
+  }
+  .input-wrap:focus-within .lead { color: var(--accent-ink); }
+  .input-wrap[data-secret] .input { padding-right: 32px; }
+  .lead {
+    position: absolute;
+    left: 9px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 12px; height: 12px;
+    color: var(--muted);
+    pointer-events: none;
+    transition: color 0.2s var(--ease-out);
+  }
+  .icon-btn {
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 26px; height: 26px;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+    border-radius: 6px;
+    transition: color 0.16s var(--ease-out), background-color 0.16s var(--ease-out);
+  }
+  .icon-btn .ico { width: 13px; height: 13px; }
+  .icon-btn:hover { color: var(--fg); background: oklch(1 0 0 / 0.07); }
+  .icon-btn[aria-pressed="true"] { color: var(--accent-ink); background: color-mix(in oklab, var(--accent) 12%, transparent); }
+
+  .link-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 28px;
+    margin-top: 8px;
+  }
+  .signal {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: var(--muted);
+  }
+  .signal .ico { width: 12px; height: 12px; margin-top: 1px; color: color-mix(in oklab, var(--muted) 84%, transparent); }
+  .signal span { min-width: 0; }
+
+  .btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 11px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    white-space: nowrap;
+    transition:
+      background-color 0.2s var(--ease-out),
+      border-color 0.2s var(--ease-out),
+      color 0.2s var(--ease-out),
+      transform 0.14s var(--ease-out),
+      box-shadow 0.24s var(--ease-out),
+      filter 0.2s var(--ease-out);
+  }
+  .btn:active:not(:disabled) { transform: translateY(1px) scale(0.995); }
+  .btn .ico { width: 13px; height: 13px; }
+  .btn:disabled { cursor: not-allowed; }
+
+  .btn-primary {
+    overflow: hidden;
+    background-image:
+      linear-gradient(180deg, oklch(1 0 0 / 0.13), transparent 46%),
+      linear-gradient(180deg, color-mix(in oklab, var(--accent) 74%, white) 0%, var(--accent) 42%, color-mix(in oklab, var(--accent-2) 52%, var(--accent)) 100%);
+    border-color: color-mix(in oklab, var(--accent-2) 62%, black 14%);
+    color: var(--on-accent);
+    box-shadow:
+      inset 0 1px 0 oklch(1 0 0 / 0.46),
+      inset 0 -1px 0 oklch(0 0 0 / 0.18),
+      0 5px 20px -8px color-mix(in oklab, var(--accent) 82%, transparent);
+  }
+  .btn-primary::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: linear-gradient(112deg, transparent 32%, oklch(1 0 0 / 0.20) 49%, transparent 64%);
+    transform: translateX(-135%);
+    transition: transform 0.7s var(--ease-out);
+  }
+  .btn-primary > * { position: relative; z-index: 1; }
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.06) saturate(1.04);
+    transform: translateY(-1px);
+    box-shadow:
+      inset 0 1px 0 oklch(1 0 0 / 0.38),
+      inset 0 -1px 0 oklch(0 0 0 / 0.24),
+      0 9px 26px -9px color-mix(in oklab, var(--accent) 95%, transparent);
+  }
+  .btn-primary:hover:not(:disabled)::after { transform: translateX(135%); }
+  .btn-primary:active:not(:disabled) { transform: translateY(0) scale(0.997); }
+  .btn-primary.is-busy {
+    cursor: progress;
+    filter: saturate(0.85) brightness(0.92);
+  }
+  .btn-primary:disabled:not(.is-busy),
+  .btn-primary:disabled:not(.is-busy):hover {
+    background-image: linear-gradient(180deg, oklch(1 0 0 / 0.055), oklch(1 0 0 / 0.012));
+    background-color: oklch(0.24 0.014 244 / 0.34);
+    border-color: var(--edge-soft);
+    color: color-mix(in oklab, var(--muted) 92%, var(--fg));
+    text-shadow: none;
+    transform: none;
+    filter: none;
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05);
+  }
+  .btn-primary:disabled:not(.is-busy)::after { display: none; }
+  .btn-primary:disabled:not(.is-busy) .kbd { display: none; }
+
+  .btn-secondary {
+    color: var(--fg);
+    border-color: var(--edge);
+    background-color: color-mix(in oklab, var(--surface) 40%, transparent);
+    background-image: linear-gradient(180deg, oklch(1 0 0 / 0.06), oklch(1 0 0 / 0.012));
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background-color: color-mix(in oklab, var(--surface-2) 66%, transparent);
+    background-image: linear-gradient(180deg, oklch(1 0 0 / 0.1), oklch(1 0 0 / 0.02));
+    border-color: var(--edge-lit);
+    transform: translateY(-1px);
+    box-shadow:
+      inset 0 1px 0 oklch(1 0 0 / 0.1),
+      0 6px 18px -14px oklch(0 0 0 / 0.9);
+  }
+  .btn-secondary:disabled {
+    color: var(--muted);
+    border-color: var(--edge-soft);
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+    transform: none;
+  }
+
+  .btn-test {
+    flex: none;
+    height: 28px;
+    padding: 0 9px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid var(--accent-line);
+    background-color: color-mix(in oklab, var(--accent) 10%, transparent);
+    background-image: linear-gradient(180deg, oklch(1 0 0 / 0.08), transparent);
+    color: var(--accent-ink);
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.08);
+  }
+  .btn-test .ico { width: 11px; height: 11px; }
+  .btn-test:hover:not(:disabled) {
+    background-color: color-mix(in oklab, var(--accent) 18%, transparent);
+    border-color: color-mix(in oklab, var(--accent) 44%, transparent);
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.12), 0 4px 14px -10px var(--accent);
+  }
+  .btn-test:disabled {
+    color: var(--muted);
+    background-color: transparent;
+    background-image: none;
+    border-color: var(--edge-soft);
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+  .btn-test.is-busy { cursor: progress; }
+
+  .btn-connect {
+    width: 100%;
+    height: 31px;
+    margin-top: 7px;
+    border-radius: 9px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--fg);
+    border: 1px dashed color-mix(in oklab, var(--accent) 36%, var(--edge));
+    background: linear-gradient(180deg, oklch(1 0 0 / 0.035), transparent), color-mix(in oklab, var(--accent) 7%, transparent);
+  }
+  .btn-connect:hover:not(:disabled) {
+    background: linear-gradient(180deg, oklch(1 0 0 / 0.06), transparent), color-mix(in oklab, var(--accent) 13%, transparent);
+    border-style: solid;
+    border-color: color-mix(in oklab, var(--accent) 50%, transparent);
+  }
+  .btn-connect:disabled {
+    color: var(--muted);
+    cursor: progress;
+    border-style: solid;
+    border-color: var(--edge-soft);
+    background: transparent;
+  }
+
+  .selection {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 38px;
+    padding: 0 9px;
+    min-width: 0;
+    background: var(--glass-well);
+    border: 1px solid var(--edge-soft);
+    border-radius: 9px;
+    box-shadow: inset 0 1px 2px oklch(0 0 0 / 0.26);
+  }
+  .selection.is-empty { border-style: dashed; border-color: var(--edge); }
+  .sel-ico { width: 13px; height: 13px; flex: none; color: color-mix(in oklab, var(--muted) 90%, var(--fg)); }
+  .sel-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .selection.is-empty .sel-name { color: var(--muted); font-weight: 450; }
+  .tag {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    border: 1px solid var(--edge-soft);
+    border-radius: 4px;
+    padding: 3px 4px;
+    background: oklch(1 0 0 / 0.03);
+  }
+  .sel-size { flex: none; font-size: 9.5px; color: var(--muted); white-space: nowrap; letter-spacing: -0.01em; }
+
+  .setting {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 9px;
+  }
+  .setting-main { min-width: 0; }
+  .setting-label { display: block; font-size: 11px; font-weight: 550; color: var(--fg); line-height: 1.25; }
+  .setting-desc { display: block; margin-top: 2px; font-size: 10px; line-height: 1.35; color: var(--muted); }
+  .select-trigger {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 6px 0 9px;
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    background-color: var(--glass-well);
+    background-image: linear-gradient(180deg, oklch(1 0 0 / 0.045), transparent);
+    color: var(--fg);
+    font-size: 11px;
+    font-weight: 550;
+    transition: border-color 0.18s var(--ease-out), background-color 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out);
+  }
+  .select-trigger:hover { border-color: var(--edge-lit); background-color: color-mix(in oklab, var(--surface-2) 62%, transparent); }
+  .select-trigger:disabled { color: var(--muted); background-color: transparent; background-image: none; border-color: var(--edge-soft); cursor: not-allowed; }
+  .select-trigger .chev { width: 10px; height: 10px; color: var(--muted); transition: transform 0.22s var(--ease-out); }
+  .select-trigger[aria-expanded="true"] .chev { transform: rotate(180deg); }
+
+  .btn-row { display: flex; gap: 7px; margin-top: 9px; }
+  .btn-row .btn { flex: 1; min-width: 0; }
+  .btn-row .btn .kbd { margin-left: 1px; }
+  .btn-row .btn-primary { font-size: 11.5px; padding: 0 9px; }
+
+  .kbd {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-family: var(--font-mono);
+    font-size: 8.5px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0;
+    padding: 3px 4px;
+    border-radius: 4px;
+    color: color-mix(in oklab, var(--on-accent) 86%, transparent);
+    background: color-mix(in oklab, var(--on-accent) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--on-accent) 10%, transparent);
+  }
+  .kbd .ico { width: 8px; height: 8px; stroke-width: 1.7; }
+
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    min-height: 16px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .check-row input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .check-row .box {
+    width: 14px; height: 14px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--edge-lit);
+    border-radius: 4px;
+    background: var(--glass-well);
+    box-shadow: inset 0 1px 1px oklch(0 0 0 / 0.22);
+    transition: background-color 0.18s var(--ease-out), border-color 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out);
+  }
+  .check-row .box .ico { width: 9px; height: 9px; color: var(--on-accent); stroke-width: 2.6; opacity: 0; transition: opacity 0.12s var(--ease-out); }
+  .check-row input:checked + .box {
+    background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 84%, white), var(--accent-2));
+    border-color: color-mix(in oklab, var(--accent) 70%, transparent);
+    box-shadow: 0 2px 8px -4px color-mix(in oklab, var(--accent) 90%, transparent), inset 0 1px 0 oklch(1 0 0 / 0.3);
+  }
+  .check-row input:checked + .box .ico { opacity: 1; }
+  .check-row:hover .box { border-color: color-mix(in oklab, var(--accent) 46%, var(--edge-lit)); }
+  .check-label { font-size: 11px; font-weight: 550; color: var(--fg); }
+  .check-hint { font-size: 10px; color: var(--muted); }
+
+  .live-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ok);
+    border: 1px solid color-mix(in oklab, var(--ok) 26%, transparent);
+    background: color-mix(in oklab, var(--ok) 8%, transparent);
+    border-radius: 999px;
+    padding: 3px 6px;
+  }
+  .live-tag .ldot { width: 4px; height: 4px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+
+  .activity-state {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+    border: 1px solid var(--edge-soft);
+    border-radius: 999px;
+    padding: 3px 7px;
+    background: oklch(1 0 0 / 0.025);
+  }
+  .activity-state[data-tone="error"] { color: var(--err); border-color: color-mix(in oklab, var(--err) 26%, transparent); background: color-mix(in oklab, var(--err) 8%, transparent); }
+  .activity-state[data-tone="done"] { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 26%, transparent); background: color-mix(in oklab, var(--ok) 8%, transparent); }
+
+  .log {
+    height: 54px;
+    padding: 5px 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: color-mix(in oklab, var(--field) 48%, transparent);
+    border: 1px solid var(--edge-soft);
+    border-radius: 9px;
+    box-shadow:
+      inset 0 1px 3px oklch(0 0 0 / 0.34),
+      inset 0 1px 0 oklch(1 0 0 / 0.015);
+    transition: border-color 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out);
+  }
+  .card-activity.is-error .log {
+    border-color: color-mix(in oklab, var(--err) 32%, var(--edge-soft));
+    box-shadow:
+      inset 0 1px 3px oklch(0 0 0 / 0.34),
+      0 0 18px -10px color-mix(in oklab, var(--err) 80%, transparent);
+  }
+  .log-line {
+    display: flex;
+    gap: 7px;
+    height: 14.66px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 14.66px;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .log-line .t { flex: none; width: 8px; text-align: center; color: var(--muted); }
+  .log-line .m { color: color-mix(in oklab, var(--fg) 88%, var(--muted)); overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.012em; }
+  .log-line[data-tone="prompt"] .t { color: var(--accent-ink); }
+  .log-line[data-tone="prompt"] .m { color: var(--accent-ink); }
+  .log-line[data-tone="dim"] .m { color: var(--muted); }
+  .log-line[data-tone="err"] .t { color: var(--err); }
+  .log-line[data-tone="err"] .m { color: var(--err); }
+  .log-line[data-tone="ok"] .t { color: var(--ok); }
+  .log-line[data-tone="ok"] .m { color: color-mix(in oklab, var(--ok) 45%, var(--fg)); }
+
+  .progress {
+    height: 3px;
+    margin-top: 7px;
+    border-radius: 2px;
+    background: oklch(1 0 0 / 0.07);
+    overflow: hidden;
+  }
+  .progress span {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--accent-2), var(--accent), var(--accent-ink), var(--accent-2));
+    background-size: 220% 100%;
+    box-shadow: 0 0 10px color-mix(in oklab, var(--accent) 70%, transparent);
+    transition: width 0.38s var(--ease-out);
+    animation: shimmer 1.9s linear infinite;
+  }
+
+  .card-result {
+    border-color: color-mix(in oklab, var(--accent) 32%, var(--edge));
+    background-color: color-mix(in oklab, var(--accent) 7%, var(--glass-card));
+    background-image:
+      radial-gradient(120% 90% at 8% 0%, color-mix(in oklab, var(--accent) 15%, transparent), transparent 62%),
+      linear-gradient(180deg, oklch(1 0 0 / 0.07), oklch(1 0 0 / 0.012) 46%, transparent);
+    box-shadow:
+      inset 0 1px 0 oklch(1 0 0 / 0.09),
+      0 0 42px -22px color-mix(in oklab, var(--accent) 95%, transparent),
+      0 14px 30px -26px oklch(0 0 0 / 0.95);
+  }
+  .card-result::before {
+    background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--accent) 70%, white 10%), transparent);
+    opacity: 0.75;
+  }
+  .result-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    color: var(--ok);
+    border: 1px solid color-mix(in oklab, var(--ok) 26%, transparent);
+    background: color-mix(in oklab, var(--ok) 8%, transparent);
+    border-radius: 999px;
+    padding: 3px 7px 3px 5px;
+  }
+  .result-state .ico { width: 10px; height: 10px; stroke-width: 2; }
+
+  .code-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .code {
-    display: flex; align-items: center; justify-content: space-between; gap: 10px;
-    background: var(--panel-2); border: 1px dashed var(--line); border-radius: 10px; padding: 12px 14px;
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: 0.24em;
+    margin-right: -0.24em;
+    user-select: all;
+    cursor: copy;
+    white-space: nowrap;
+    background: linear-gradient(100deg, color-mix(in oklab, var(--accent) 30%, white) 0%, color-mix(in oklab, var(--accent) 56%, white) 46%, color-mix(in oklab, var(--accent) 24%, white) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 0 18px color-mix(in oklab, var(--accent) 42%, transparent));
+    transition: filter 0.2s var(--ease-out);
   }
-  .code b { font-family: var(--mono); font-size: 24px; letter-spacing: 0.34em; }
-  .hint { color: var(--muted); font-size: 11px; line-height: 1.55; margin: 8px 0 0; }
-  .warn-list { margin: 10px 0 0; padding: 0; list-style: none; max-height: 90px; overflow-y: auto; }
-  .warn-list li { color: #c4b5fd; font-size: 11px; line-height: 1.45; padding: 3px 0; border-bottom: 1px solid rgba(45, 39, 64, 0.5); }
-  .warn-list li:last-child { border-bottom: none; }
-  .error { color: var(--bad); font-size: 11.5px; line-height: 1.5; }
-  .spacer { flex: 1; }
-  .foot { color: var(--muted); font-size: 10.5px; line-height: 1.5; }
-  a { color: #c4b5fd; }
+  .code:hover { filter: drop-shadow(0 0 24px color-mix(in oklab, var(--accent) 62%, transparent)) brightness(1.1); }
+  .code.is-copied {
+    background: linear-gradient(100deg, var(--ok), color-mix(in oklab, var(--ok) 58%, white));
+    -webkit-background-clip: text;
+    background-clip: text;
+    filter: drop-shadow(0 0 16px color-mix(in oklab, var(--ok) 34%, transparent));
+  }
+  .copy-btn { flex: none; min-width: 84px; height: 34px; font-size: 11.5px; }
+
+  .instruction { margin-top: 5px; font-size: 10.5px; line-height: 1.45; color: var(--muted); }
+  .instruction .mono { color: color-mix(in oklab, var(--fg) 80%, var(--muted)); }
+
+  .warns {
+    margin-top: 9px;
+    padding: 8px 9px 7px;
+    border-radius: 9px;
+    background-color: color-mix(in oklab, var(--warn) 7%, transparent);
+    background-image: linear-gradient(180deg, oklch(1 0 0 / 0.04), transparent 54%);
+    border: 1px solid color-mix(in oklab, var(--warn) 24%, transparent);
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05);
+  }
+  .warns-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid color-mix(in oklab, var(--warn) 16%, transparent);
+  }
+  .warns-title {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--warn);
+  }
+  .warns-note { font-size: 9.5px; color: color-mix(in oklab, var(--warn) 36%, var(--muted)); }
+  .warns-list {
+    max-height: 84px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--warn) 32%, transparent) transparent;
+  }
+  .warns-list::-webkit-scrollbar { width: 6px; }
+  .warns-list::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--warn) 28%, transparent); border-radius: 3px; }
+  .warns-list li {
+    display: flex;
+    gap: 7px;
+    padding: 5px 0;
+    font-size: 10.5px;
+    line-height: 1.4;
+    color: color-mix(in oklab, var(--warn) 54%, var(--fg));
+  }
+  .warns-list li + li { border-top: 1px solid color-mix(in oklab, var(--warn) 12%, transparent); }
+  .warns-list li::before {
+    content: "";
+    flex: none;
+    width: 3px; height: 3px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: var(--warn);
+    box-shadow: 0 0 6px color-mix(in oklab, var(--warn) 60%, transparent);
+  }
+  .clean {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 9px;
+    padding: 7px 8px;
+    font-size: 10px;
+    line-height: 1.35;
+    color: color-mix(in oklab, var(--ok) 52%, var(--fg));
+    background: color-mix(in oklab, var(--ok) 6%, transparent);
+    border: 1px solid color-mix(in oklab, var(--ok) 20%, transparent);
+    border-radius: 8px;
+  }
+  .clean .ico { width: 11px; height: 11px; color: var(--ok); stroke-width: 1.9; }
+
+  .panel-foot {
+    position: relative;
+    z-index: 1;
+    flex: none;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 13px;
+    border-top: 1px solid var(--edge-soft);
+    font-size: 10.5px;
+    color: var(--muted);
+    background: linear-gradient(180deg, transparent, oklch(1 0 0 / 0.018));
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+  }
+  .panel-foot .ico { width: 11px; height: 11px; color: color-mix(in oklab, var(--muted) 82%, transparent); }
+
+  button:focus-visible,
+  .code:focus-visible {
+    outline: 2px solid var(--accent-ink);
+    outline-offset: 2px;
+  }
+  .input:focus-visible { outline: none; }
+  .check-row input:focus-visible + .box { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+  .code:focus-visible { outline-offset: 4px; border-radius: 3px; }
+
+  .mode-menu {
+    position: fixed;
+    z-index: 40;
+    width: 274px;
+    padding: 4px;
+    background-color: color-mix(in oklab, var(--surface-2) 76%, transparent);
+    background-image: linear-gradient(180deg, oklch(1 0 0 / 0.07), oklch(1 0 0 / 0.012) 44%, transparent);
+    border: 1px solid var(--edge);
+    border-radius: 11px;
+    -webkit-backdrop-filter: blur(30px) saturate(160%);
+    backdrop-filter: blur(30px) saturate(160%);
+    box-shadow:
+      0 30px 60px -18px oklch(0 0 0 / 0.86),
+      0 0 0 1px oklch(0 0 0 / 0.18),
+      inset 0 1px 0 oklch(1 0 0 / 0.09);
+    animation: menuIn 0.18s var(--ease-out) both;
+  }
+  .mode-opt {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: 8px 26px 8px 8px;
+    border-radius: 7px;
+    text-align: left;
+    transition: background-color 0.14s var(--ease-out);
+  }
+  .mode-opt:hover { background: oklch(1 0 0 / 0.06); }
+  .mode-opt:focus-visible { background: oklch(1 0 0 / 0.07); outline: 2px solid var(--accent-ink); outline-offset: -2px; }
+  .mode-opt[aria-selected="true"] { background: color-mix(in oklab, var(--accent) 10%, transparent); }
+  .mode-name { font-size: 11.5px; font-weight: 550; line-height: 1.3; color: var(--fg); }
+  .mode-desc { font-size: 10.5px; line-height: 1.35; color: var(--muted); }
+  .mode-check { position: absolute; right: 8px; top: 10px; width: 12px; height: 12px; color: var(--accent-ink); opacity: 0; }
+  .mode-opt[aria-selected="true"] .mode-check { opacity: 1; }
+  .mode-opt[aria-selected="true"] .mode-name { font-weight: 650; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    width: 11px; height: 11px;
+    flex: none;
+    border-radius: 50%;
+    border: 1.5px solid color-mix(in oklab, var(--on-accent) 24%, transparent);
+    border-top-color: var(--on-accent);
+    box-shadow: 0 0 7px color-mix(in oklab, var(--on-accent) 14%, transparent);
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes shimmer { from { background-position: 0% 0; } to { background-position: -220% 0; } }
+  @keyframes pulseOk {
+    0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--ok) 42%, transparent); }
+    70% { box-shadow: 0 0 0 5px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+  @keyframes aurora {
+    from { transform: translate3d(-2%, -1%, 0) scale(1); }
+    to { transform: translate3d(3%, 2%, 0) scale(1.08); }
+  }
+  @keyframes driftA {
+    from { transform: translate3d(0, 0, 0) scale(1); }
+    to { transform: translate3d(34px, 26px, 0) scale(1.12); }
+  }
+  @keyframes driftB {
+    from { transform: translate3d(0, 0, 0) scale(1.05); }
+    to { transform: translate3d(-30px, -22px, 0) scale(0.94); }
+  }
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes menuIn {
+    from { opacity: 0; transform: translateY(-4px) scale(0.985); }
+    to { opacity: 1; transform: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+    .spinner { animation-duration: 2s !important; }
+  }
 </style>
 </head>
 <body>
-  <div class="brand">
-    <h1>figrbx</h1>
-    <small>Figma → Roblox Studio</small>
-  </div>
 
-  <div class="card">
-    <h2>Bridge</h2>
-    <div class="field">
-      <label for="bridgeUrl">Local bridge URL</label>
-      <input id="bridgeUrl" spellcheck="false" placeholder="http://127.0.0.1:17341" />
-    </div>
-    <div class="field">
-      <label for="token">Bridge token</label>
-      <input id="token" type="password" spellcheck="false" placeholder="Printed when the bridge starts" />
-    </div>
-    <div class="row">
-      <div class="status"><span class="dot" id="bridgeDot"></span><span id="bridgeStatus">Not checked</span></div>
-      <button class="shrink" id="testBtn">Test</button>
-      <button class="shrink" id="connectBtn" style="display:none">Connect Roblox</button>
-    </div>
-  </div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-frame" viewBox="0 0 16 16"><path d="M5.5 2H2v3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5"/><rect x="5.2" y="5.2" width="5.6" height="5.6" rx="1"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.7 8S4 3.9 8 3.9 14.3 8 14.3 8 12 12.1 8 12.1 1.7 8 1.7 8Z"/><circle cx="8" cy="8" r="1.7"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 16 16"><path d="M1.7 8S4 3.9 8 3.9 14.3 8 14.3 8 12 12.1 8 12.1 1.7 8 1.7 8Z"/><circle cx="8" cy="8" r="1.7"/><path d="m2.5 2.5 11 11"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 16 16"><path d="m4 6.5 4 4 4-4"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 16 16"><path d="M2.6 8h10.2M9.4 4.6 12.8 8l-3.4 3.4"/></symbol>
+  <symbol id="i-enter" viewBox="0 0 16 16"><path d="M12.4 3.2v5.2a2 2 0 0 1-2 2H3.6M6.4 7.2 3.4 10.4l3.1 3.2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="m3 8.4 3.3 3.4L13 4.6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.4 3.5H4a1.5 1.5 0 0 0-1.5 1.5v6.4"/></symbol>
+  <symbol id="i-download" viewBox="0 0 16 16"><path d="M8 2.5v7.6M4.8 7.2 8 10.4l3.2-3.2M3 13.2h10"/></symbol>
+  <symbol id="i-export" viewBox="0 0 16 16"><path d="M8 10.2V2.6M4.9 5.7 8 2.6l3.1 3.1M3 9.6v3a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 13 12.6v-3"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3.4" y="7" width="9.2" height="7" rx="1.6"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7"/></symbol>
+  <symbol id="i-link" viewBox="0 0 16 16"><path d="M6.4 9.6 9.6 6.4M6.9 4.4l1.3-1.3a2.6 2.6 0 0 1 3.7 3.7l-1.3 1.3M9.1 11.6l-1.3 1.3a2.6 2.6 0 0 1-3.7-3.7l1.3-1.3"/></symbol>
+  <symbol id="i-key" viewBox="0 0 16 16"><circle cx="5.4" cy="8" r="2.5"/><path d="M7.9 8H14M11.8 8v2.2M13.2 8v1.5"/></symbol>
+  <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.9"/><path d="M8 7.3v3.4M8 4.9v.01"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M6.2 3.9 11.8 8 6.2 12.1Z"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 16 16"><path d="M9.1 2 3.9 8.9h3.3L6.8 14l5.3-6.9H8.8Z"/></symbol>
+</svg>
 
-  <div class="card">
-    <h2>Export</h2>
-    <div class="field">
-      <label>Selection</label>
-      <div class="selection" id="selection">Nothing selected</div>
-    </div>
-    <div class="field">
-      <label for="textMode">Text handling</label>
-      <select id="textMode">
-        <option value="auto">Auto — bake only unknown fonts</option>
-        <option value="live">Live — always editable text</option>
-        <option value="exact">Exact — bake fonts Roblox cannot match</option>
-      </select>
-    </div>
-    <div class="actions">
-      <button class="primary" id="exportBtn">Export to Studio</button>
-      <button id="downloadBtn">Download JSON</button>
-    </div>
-    <label class="check"><input type="checkbox" id="liveSync" /> Live sync while this window is open</label>
-  </div>
+<div class="stage">
+  <section class="panel" id="panel" aria-label="figrbx plugin panel">
+    <div class="aura" aria-hidden="true"><i></i><i></i><i></i></div>
+    <header class="panel-head">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 16 16"><path d="M6.1 2.8H4.9A2.1 2.1 0 0 0 2.8 4.9v1.2M9.9 2.8h1.2a2.1 2.1 0 0 1 2.1 2.1v1.2M6.1 13.2H4.9a2.1 2.1 0 0 1-2.1-2.1v-1.2M9.9 13.2h1.2a2.1 2.1 0 0 0 2.1-2.1v-1.2"/><path d="M5.9 8h3.9M8.2 6.4 9.8 8l-1.6 1.6"/></svg>
+        </span>
+        <div>
+          <div class="wordmark">figrbx</div>
+          <div class="tagline">figma <svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg> roblox studio</div>
+        </div>
+      </div>
+      <span class="version mono" id="version">v0.1.0</span>
+    </header>
 
-  <div class="card">
-    <h2>Activity</h2>
-    <div id="log">Ready.</div>
-    <div id="error" class="error" style="display:none"></div>
-  </div>
+    <div class="panel-body" id="panelBody">
+      <section class="card" aria-labelledby="bridgeLabel">
+        <div class="card-head">
+          <div class="card-title">
+            <span class="tile" aria-hidden="true"><svg class="ico"><use href="#i-link"/></svg></span>
+            <h2 class="card-label" id="bridgeLabel">Bridge</h2>
+          </div>
+          <span class="status-pill" id="bridgeStatus" data-tone="err" role="status">
+            <span class="dot" aria-hidden="true"></span>
+            <span id="bridgeStatusText">Offline</span>
+          </span>
+        </div>
 
-  <div class="card" id="result">
-    <h2>Transfer code</h2>
-    <div class="code">
-      <b id="code">------</b>
-      <button class="shrink" id="copyBtn">Copy</button>
+        <div class="field">
+          <label class="field-label" for="bridgeUrl">Local bridge URL</label>
+          <span class="input-wrap">
+            <svg class="ico lead" aria-hidden="true"><use href="#i-link"/></svg>
+            <input class="input" id="bridgeUrl" type="text" value="http://127.0.0.1:17341" spellcheck="false" autocomplete="off">
+          </span>
+        </div>
+        <div class="field">
+          <label class="field-label" for="bridgeToken">Bridge token</label>
+          <span class="input-wrap" data-secret>
+            <svg class="ico lead" aria-hidden="true"><use href="#i-key"/></svg>
+            <input class="input" id="bridgeToken" type="password" spellcheck="false" autocomplete="off" placeholder="printed when the bridge starts">
+            <button class="icon-btn" id="toggleToken" type="button" aria-label="Show bridge token" aria-pressed="false">
+              <svg class="ico"><use id="tokenEye" href="#i-eye"/></svg>
+            </button>
+          </span>
+        </div>
+
+        <div class="link-row">
+          <span class="signal">
+            <svg class="ico" aria-hidden="true"><use href="#i-info"/></svg>
+            <span id="bridgeHint">Helper not running on this machine</span>
+          </span>
+          <button class="btn btn-test" id="testBridge" type="button">
+            <svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>
+            <span id="testLabel">Test</span>
+          </button>
+        </div>
+
+        <button class="btn btn-connect" id="connectRoblox" type="button" hidden>
+          <svg class="ico" aria-hidden="true"><use href="#i-link"/></svg>
+          <span id="connectLabel">Connect Roblox</span>
+        </button>
+      </section>
+
+      <section class="card" aria-labelledby="exportLabel">
+        <div class="card-head">
+          <div class="card-title">
+            <span class="tile" aria-hidden="true"><svg class="ico"><use href="#i-export"/></svg></span>
+            <h2 class="card-label" id="exportLabel">Export</h2>
+          </div>
+          <span class="live-tag" id="liveTag" hidden><span class="ldot" aria-hidden="true"></span>Live sync</span>
+        </div>
+
+        <div class="selection" id="selection">
+          <svg class="ico sel-ico" aria-hidden="true"><use href="#i-frame"/></svg>
+          <span class="sel-name" id="selName">Nothing selected</span>
+          <span class="tag" id="selType" hidden>Frame</span>
+          <span class="sel-size mono" id="selSize" hidden></span>
+        </div>
+
+        <div class="setting">
+          <div class="setting-main">
+            <span class="setting-label" id="modeLabel">Text handling</span>
+            <span class="setting-desc" id="modeDesc">Bakes only fonts Roblox has no match for.</span>
+          </div>
+          <button class="select-trigger" id="modeTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="modeLabel modeValue">
+            <span id="modeValue">Auto</span>
+            <svg class="ico chev" aria-hidden="true"><use href="#i-chevron"/></svg>
+          </button>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" id="exportBtn" type="button">
+            <span class="spinner" id="exportSpinner" hidden aria-hidden="true"></span>
+            <svg class="ico" id="exportIcon" aria-hidden="true"><use href="#i-export"/></svg>
+            <span id="exportLabelText">Export to Studio</span>
+            <span class="kbd" id="exportKbd"><span class="kbd-mod">Ctrl</span><svg class="ico" aria-hidden="true"><use href="#i-enter"/></svg></span>
+          </button>
+          <button class="btn btn-secondary" id="jsonBtn" type="button">
+            <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
+            <span>Download JSON</span>
+          </button>
+        </div>
+
+        <label class="check-row">
+          <input type="checkbox" id="liveSync">
+          <span class="box" aria-hidden="true"><svg class="ico"><use href="#i-check"/></svg></span>
+          <span class="check-label">Live sync</span>
+          <span class="check-hint">re-exports when the frame changes</span>
+        </label>
+      </section>
+
+      <section class="card card-activity" id="activityCard" aria-labelledby="activityLabel">
+        <div class="card-head">
+          <div class="card-title">
+            <span class="tile" aria-hidden="true"><svg class="ico"><use href="#i-bolt"/></svg></span>
+            <h2 class="card-label" id="activityLabel">Activity</h2>
+          </div>
+          <span class="activity-state mono" id="activityState" data-tone="idle">idle</span>
+        </div>
+        <div class="log" id="log" role="log" aria-live="polite" aria-label="Activity log"></div>
+        <div class="progress" id="progress" hidden><span id="progressFill"></span></div>
+      </section>
+
+      <section class="card card-result" id="resultCard" tabindex="-1" hidden aria-labelledby="resultLabel">
+        <div class="card-head">
+          <div class="card-title">
+            <span class="tile" aria-hidden="true"><svg class="ico"><use href="#i-key"/></svg></span>
+            <h2 class="card-label" id="resultLabel">Transfer code</h2>
+          </div>
+          <span class="result-state">
+            <svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>
+            Exported
+          </span>
+        </div>
+        <div class="code-row">
+          <div class="code" id="code" title="Click to copy">------</div>
+          <button class="btn btn-secondary copy-btn" id="copyBtn" type="button">
+            <svg class="ico" id="copyIcon" aria-hidden="true"><use href="#i-copy"/></svg>
+            <span id="copyLabel">Copy</span>
+          </button>
+        </div>
+        <p class="instruction">In Roblox Studio, open the <span class="mono">figrbx</span> plugin and paste this code.</p>
+
+        <div class="warns" id="warns" hidden>
+          <div class="warns-head">
+            <span class="warns-title" id="warnsTitle">approximations</span>
+            <span class="warns-note">check before pasting</span>
+          </div>
+          <ul class="warns-list" id="warnsList"></ul>
+        </div>
+
+        <div class="clean" id="cleanRow" hidden>
+          <svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>
+          No approximations — every layer mapped 1:1.
+        </div>
+      </section>
     </div>
-    <p class="hint">Open Roblox Studio, press the figrbx button, and paste this code.</p>
-    <ul class="warn-list" id="warnings"></ul>
-  </div>
 
-  <div class="spacer"></div>
-  <div class="foot">Everything stays on this machine. The bridge uploads images to your own Roblox account.</div>
+    <footer class="panel-foot">
+      <svg class="ico" aria-hidden="true"><use href="#i-lock"/></svg>
+      <span>Everything stays on this machine.</span>
+    </footer>
+  </section>
+</div>
 
-  <script>/*__UI_SCRIPT__*/</script>
+<div class="mode-menu" id="modeMenu" role="listbox" aria-label="Text handling" hidden>
+  <button class="mode-opt" type="button" role="option" data-mode="auto" aria-selected="true">
+    <span class="mode-name">Auto</span>
+    <span class="mode-desc">Bakes only fonts Roblox has no match for.</span>
+    <svg class="ico mode-check" aria-hidden="true"><use href="#i-check"/></svg>
+  </button>
+  <button class="mode-opt" type="button" role="option" data-mode="live" aria-selected="false">
+    <span class="mode-name">Live</span>
+    <span class="mode-desc">Always keeps text editable; fonts may substitute.</span>
+    <svg class="ico mode-check" aria-hidden="true"><use href="#i-check"/></svg>
+  </button>
+  <button class="mode-opt" type="button" role="option" data-mode="exact" aria-selected="false">
+    <span class="mode-name">Exact</span>
+    <span class="mode-desc">Bakes every font Roblox cannot match to an image.</span>
+    <svg class="ico mode-check" aria-hidden="true"><use href="#i-check"/></svg>
+  </button>
+</div>
+
+<script>/*__UI_SCRIPT__*/</script>
 </body>
 </html>
