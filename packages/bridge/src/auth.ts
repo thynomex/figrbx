@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Config, StoredTokens } from './config.js';
-import { hasApiKey, hasOAuth, configPath, redirectUri, writeConfig } from './config.js';
+import { configPath, hasApiKey, hasOAuth, redirectUri, writeConfig } from './config.js';
 
 const AUTHORIZE_URL = 'https://apis.roblox.com/oauth/v1/authorize';
 const TOKEN_URL = 'https://apis.roblox.com/oauth/v1/token';

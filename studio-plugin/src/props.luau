@@ -5,9 +5,13 @@ local Props = {}
 
 local ALLOWED_CLASSES = {
 	ScreenGui = true,
+	BillboardGui = true,
+	SurfaceGui = true,
+	ProximityPrompt = true,
 	Frame = true,
 	TextLabel = true,
 	TextButton = true,
+	TextBox = true,
 	ImageLabel = true,
 	ImageButton = true,
 	ScrollingFrame = true,
@@ -15,6 +19,9 @@ local ALLOWED_CLASSES = {
 	UICorner = true,
 	UIStroke = true,
 	UIGradient = true,
+	UIShadow = true,
+	UIListLayout = true,
+	UIGridLayout = true,
 	UIAspectRatioConstraint = true,
 }
 
@@ -38,6 +45,8 @@ local function decode(value: any): any
 		return value.v
 	elseif kind == "vector2" then
 		return Vector2.new(value.v[1], value.v[2])
+	elseif kind == "vector3" then
+		return Vector3.new(value.v[1], value.v[2], value.v[3])
 	elseif kind == "enum" then
 		local enumType = Enum[value.enum]
 		assert(enumType, "unknown enum " .. tostring(value.enum))

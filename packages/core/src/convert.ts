@@ -17,7 +17,15 @@ import type {
   OdtText,
   Rgba,
 } from './schema.js';
-import { type Behavior, type ParsedName, parseLayerName, textFormatString } from './tags.js';
+import {
+  type Behavior,
+  type ControlTag,
+  type ParsedName,
+  behaviorTarget,
+  hasControl,
+  parseLayerName,
+  textFormatString,
+} from './tags.js';
 
 export type RbxValue =
   | { t: 'udim2'; v: [number, number, number, number] }
@@ -30,7 +38,8 @@ export type RbxValue =
   | { t: 'font'; name: string }
   | { t: 'colorsequence'; v: ColorSequencePoint[] }
   | { t: 'numbersequence'; v: NumberSequencePoint[] }
-  | { t: 'vector2'; v: [number, number] };
+  | { t: 'vector2'; v: [number, number] }
+  | { t: 'vector3'; v: [number, number, number] };
 
 export type ColorSequencePoint = {
   t: number;
@@ -46,16 +55,37 @@ export type RbxNode = {
   props: Record<string, RbxValue>;
   /** Behavior tags parsed from the layer name. */
   behaviors?: Behavior[];
+  /** Control tags, including ones the Studio runtime will consume later. */
+  controls?: ControlTag[];
   /** Attribute names for `{Name}` bindings, in placeholder order. */
   bindings?: string[];
   /** Original text with `%s` placeholders, for runtime attribute binding. */
   textFormat?: string;
+  /** `_bind:path`: the whole label comes from this player-relative path. */
+  bindPath?: string;
   children: RbxNode[];
+};
+
+/** Where the imported UI lives at runtime. */
+export type RbxHost = {
+  kind: 'screen' | 'billboard' | 'surface' | 'prompt';
+  /** World width in studs for billboard / surface / prompt hosts. */
+  studs?: number;
+  /** Anchor part the host is adorned to, for world hosts. */
+  anchor?: {
+    name: string;
+    size: [number, number, number];
+    position: [number, number, number];
+  };
+  /** ProximityPrompt spec, for the prompt host. */
+  prompt?: RbxNode;
 };
 
 export type RbxDocument = {
   version: 1;
+  /** The LayerCollector node: ScreenGui, BillboardGui, or SurfaceGui. */
   screenGui: RbxNode;
+  host: RbxHost;
   warnings: string[];
   meta: {
     name: string;
@@ -75,6 +105,16 @@ type Ctx = {
   warnings: string[];
   doc: OdtDocument;
   imageAsset: (ref: string) => string | undefined;
+  /** Text layers chosen by a parent's `_textbox` tag. */
+  textboxIds: Set<string>;
+  /** Number of `_tabgroup` ancestors, used to validate bare `_tab` / `_page`. */
+  tabGroupDepth: number;
+  /** Number of interactive ancestors, used to validate state layers. */
+  interactiveDepth: number;
+  /** 1 once we are below the root, where host tags are no longer valid. */
+  hostDepth: number;
+  /** Durations requested by `_hold` layers, used to configure the prompt. */
+  holdDurations: number[];
 };
 
 const EPSILON = 1e-6;
@@ -110,6 +150,10 @@ function propColor(color: Rgba): RbxValue {
 
 function propEnum(enumName: string, name: string): RbxValue {
   return { t: 'enum', enum: enumName, name };
+}
+
+function propVector3(x: number, y: number, z: number): RbxValue {
+  return { t: 'vector3', v: [round(x, 4), round(y, 4), round(z, 4)] };
 }
 
 function sanitizeName(name: string): string {
@@ -228,19 +272,484 @@ function cornerScale(node: OdtNode): { scale: number; approximate: boolean } | u
   return { scale: Math.min(0.5, scale), approximate };
 }
 
-function describeEffects(effects: OdtEffect[] | undefined, warnings: string[], name: string): void {
+/**
+ * Blur has no UI equivalent. Shadows do: UIShadow renders drop and inner
+ * shadows natively, so they are emitted as children instead of being dropped.
+ */
+function warnUnsupportedEffects(
+  effects: OdtEffect[] | undefined,
+  warnings: string[],
+  name: string,
+): void {
   if (!effects) return;
   for (const effect of effects) {
-    if (effect.type === 'drop-shadow') {
-      if (effect.offsetY > 0.5 || effect.radius > 0.5 || (effect.spread ?? 0) > 0.5) {
-        warnings.push(`Drop shadow on "${name}" was skipped (not supported)`);
-      }
-    } else if (effect.type === 'inner-shadow') {
-      warnings.push(`Inner shadow on "${name}" was skipped (not supported)`);
-    } else {
+    if (effect.type === 'layer-blur' || effect.type === 'background-blur') {
       warnings.push(`Blur on "${name}" was skipped (not supported by Roblox UI)`);
     }
   }
+}
+
+/** Shadow offsets, spread and blur are expressed as scales so they track the layout. */
+function addShadows(
+  node: OdtNode,
+  children: RbxNode[],
+  ctx: Ctx,
+  /** Text shadows follow glyphs; shape shadows follow the GuiObject's rectangle. */
+  isText: boolean,
+): void {
+  const shadows = (node.effects ?? []).filter(
+    (effect): effect is Extract<OdtEffect, { type: 'drop-shadow' | 'inner-shadow' }> =>
+      effect.type === 'drop-shadow' || effect.type === 'inner-shadow',
+  );
+  if (shadows.length === 0) return;
+
+  const width = node.w > EPSILON ? node.w : 1;
+  const height = node.h > EPSILON ? node.h : 1;
+  const shortSide = Math.max(EPSILON, Math.min(width, height));
+
+  let zIndex = 0;
+  for (const effect of shadows) {
+    const inner = effect.type === 'inner-shadow';
+    if (inner && isText) {
+      ctx.warnings.push(
+        `Inner shadow on "${node.rawName}" cannot render inside text glyphs — skipped. Use a drop shadow or a shape layer for the inner effect.`,
+      );
+      continue;
+    }
+
+    const spread = effect.spread ?? 0;
+    children.push({
+      className: 'UIShadow',
+      name: inner ? 'InnerShadow' : 'DropShadow',
+      figmaId: `${node.id}:shadow:${zIndex}`,
+      props: {
+        Offset: propUdim2(effect.offsetX / width, 0, effect.offsetY / height, 0),
+        Spread: propUdim2(spread / width, 0, spread / height, 0),
+        BlurRadius: { t: 'udim', v: [round(effect.radius / shortSide, 5), 0] },
+        Color: propColor(effect.color),
+        Transparency: propNumber(1 - clamp01(effect.color.a)),
+        Inset: propBoolean(inner),
+        Mode: propEnum('ApplyShadowMode', isText ? 'Text' : 'Shape'),
+        ZIndex: propNumber(zIndex),
+      },
+      children: [],
+    });
+    zIndex += 1;
+  }
+}
+
+type HorizontalAlign = 'Left' | 'Center' | 'Right';
+type VerticalAlign = 'Top' | 'Center' | 'Bottom';
+
+type LayoutPlan =
+  | {
+      kind: 'list';
+      direction: 'Horizontal' | 'Vertical';
+      gap: number;
+      horizontal: HorizontalAlign;
+      vertical: VerticalAlign;
+    }
+  | {
+      kind: 'grid';
+      columns: number;
+      cellW: number;
+      cellH: number;
+      gapX: number;
+      gapY: number;
+      horizontal: HorizontalAlign;
+      vertical: VerticalAlign;
+    };
+
+/** Positions closer than half a design pixel are the same line. */
+function near(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 0.5;
+}
+
+/** Consecutive gaps must be identical; a 1 px deviation is not a list. */
+function gapsAgree(gaps: number[]): boolean {
+  return gaps.every((gap) => Math.abs(gap - gaps[0]!) <= 0.01);
+}
+
+function uniformGap(items: Array<{ start: number; size: number }>): number | undefined {
+  if (items.length < 2) return undefined;
+  const sorted = [...items].sort((a, b) => a.start - b.start);
+  const gaps: number[] = [];
+  for (let i = 0; i + 1 < sorted.length; i++) {
+    gaps.push(sorted[i + 1]!.start - (sorted[i]!.start + sorted[i]!.size));
+  }
+  if (gaps.some((gap) => gap < -0.01)) return undefined;
+  if (!gapsAgree(gaps)) return undefined;
+  return Math.max(0, gaps[0]!);
+}
+
+function sharedHorizontal(nodes: OdtNode[]): HorizontalAlign | undefined {
+  const first = nodes[0]!;
+  if (nodes.every((node) => near(node.x, first.x))) return 'Left';
+  if (nodes.every((node) => near(node.x + node.w, first.x + first.w))) return 'Right';
+  if (nodes.every((node) => near(node.x + node.w / 2, first.x + first.w / 2))) return 'Center';
+  return undefined;
+}
+
+function sharedVertical(nodes: OdtNode[]): VerticalAlign | undefined {
+  const first = nodes[0]!;
+  if (nodes.every((node) => near(node.y, first.y))) return 'Top';
+  if (nodes.every((node) => near(node.y + node.h, first.y + first.h))) return 'Bottom';
+  if (nodes.every((node) => near(node.y + node.h / 2, first.y + first.h / 2))) return 'Center';
+  return undefined;
+}
+
+function groupHorizontal(node: OdtNode, nodes: OdtNode[]): HorizontalAlign {
+  const start = Math.min(...nodes.map((child) => child.x));
+  const end = Math.max(...nodes.map((child) => child.x + child.w));
+  if (near(start, 0)) return 'Left';
+  if (near(end, node.w)) return 'Right';
+  if (near((start + end) / 2, node.w / 2)) return 'Center';
+  return 'Left';
+}
+
+function groupVertical(node: OdtNode, nodes: OdtNode[]): VerticalAlign {
+  const start = Math.min(...nodes.map((child) => child.y));
+  const end = Math.max(...nodes.map((child) => child.y + child.h));
+  if (near(start, 0)) return 'Top';
+  if (near(end, node.h)) return 'Bottom';
+  if (near((start + end) / 2, node.h / 2)) return 'Center';
+  return 'Top';
+}
+
+/** Children tagged _ignore never participate in inferred layout. */
+function layoutChildren(node: OdtNode): OdtNode[] {
+  return (node.children ?? []).filter(
+    (child) => !hasControl(parseLayerName(child.rawName), 'ignore'),
+  );
+}
+
+function detectListPlan(
+  node: OdtNode,
+): Omit<Extract<LayoutPlan, { kind: 'list' }>, 'kind'> | undefined {
+  const children = layoutChildren(node);
+  if (children.length < 3) return undefined;
+
+  const verticalGap = uniformGap(children.map((child) => ({ start: child.y, size: child.h })));
+  const horizontalGap = uniformGap(children.map((child) => ({ start: child.x, size: child.w })));
+
+  if (verticalGap !== undefined) {
+    const horizontal = sharedHorizontal(children);
+    if (horizontal) {
+      return {
+        direction: 'Vertical',
+        gap: verticalGap,
+        horizontal,
+        vertical: groupVertical(node, children),
+      };
+    }
+  }
+  if (horizontalGap !== undefined) {
+    const vertical = sharedVertical(children);
+    if (vertical) {
+      return {
+        direction: 'Horizontal',
+        gap: horizontalGap,
+        horizontal: groupHorizontal(node, children),
+        vertical,
+      };
+    }
+  }
+  return undefined;
+}
+
+function explicitListPlan(node: OdtNode, ctx: Ctx, tag: string): LayoutPlan | undefined {
+  const children = layoutChildren(node);
+  if (children.length < 2) {
+    ctx.warnings.push(
+      `"${node.rawName}": _${tag} needs at least two child layers — kept absolute positions.`,
+    );
+    return undefined;
+  }
+
+  const verticalGap = uniformGap(children.map((child) => ({ start: child.y, size: child.h })));
+  const horizontalGap = uniformGap(children.map((child) => ({ start: child.x, size: child.w })));
+
+  let direction: 'Horizontal' | 'Vertical';
+  let gap: number;
+  if (verticalGap !== undefined && horizontalGap === undefined) {
+    direction = 'Vertical';
+    gap = verticalGap;
+  } else if (horizontalGap !== undefined && verticalGap === undefined) {
+    direction = 'Horizontal';
+    gap = horizontalGap;
+  } else if (verticalGap !== undefined) {
+    direction = 'Vertical';
+    gap = verticalGap;
+  } else if (horizontalGap !== undefined) {
+    direction = 'Horizontal';
+    gap = horizontalGap;
+  } else {
+    ctx.warnings.push(
+      `"${node.rawName}": _${tag} needs evenly spaced children, but the gaps differ — kept absolute positions. Make the spacing identical in Figma or remove _${tag}.`,
+    );
+    return undefined;
+  }
+
+  const horizontal =
+    direction === 'Vertical'
+      ? (sharedHorizontal(children) ?? groupHorizontal(node, children))
+      : groupHorizontal(node, children);
+  const vertical =
+    direction === 'Horizontal'
+      ? (sharedVertical(children) ?? groupVertical(node, children))
+      : groupVertical(node, children);
+
+  if (direction === 'Vertical' && !sharedHorizontal(children)) {
+    ctx.warnings.push(
+      `"${node.rawName}": list items do not share a horizontal edge — aligned ${horizontal.toLowerCase()}. Align them in Figma to control the list alignment.`,
+    );
+  }
+  if (direction === 'Horizontal' && !sharedVertical(children)) {
+    ctx.warnings.push(
+      `"${node.rawName}": list items do not share a vertical edge — aligned ${vertical.toLowerCase()}. Align them in Figma to control the list alignment.`,
+    );
+  }
+
+  return { kind: 'list', direction, gap, horizontal, vertical };
+}
+
+function gridPlan(node: OdtNode, ctx: Ctx): LayoutPlan | undefined {
+  const children = layoutChildren(node);
+  if (children.length < 2) {
+    ctx.warnings.push(
+      `"${node.rawName}": _grid needs at least two child layers — kept absolute positions.`,
+    );
+    return undefined;
+  }
+
+  const first = children[0]!;
+  if (!children.every((child) => near(child.w, first.w) && near(child.h, first.h))) {
+    ctx.warnings.push(
+      `"${node.rawName}": _grid needs equal cell sizes, but the children differ — kept absolute positions. Make every cell the same size or remove _grid.`,
+    );
+    return undefined;
+  }
+
+  const sorted = [...children].sort((a, b) => a.y - b.y || a.x - b.x);
+  const rows: OdtNode[][] = [];
+  for (const child of sorted) {
+    const row = rows[rows.length - 1];
+    if (row && near(row[0]!.y, child.y)) row.push(child);
+    else rows.push([child]);
+  }
+  for (const row of rows) row.sort((a, b) => a.x - b.x);
+
+  const columns = rows[0]!.length;
+  const ragged = rows.some((row, index) =>
+    index < rows.length - 1 ? row.length !== columns : row.length > columns,
+  );
+  if (ragged) {
+    ctx.warnings.push(
+      `"${node.rawName}": _grid children form an irregular grid (only the last row may be shorter) — kept absolute positions. Align the cells in Figma or remove _grid.`,
+    );
+    return undefined;
+  }
+
+  const origin = rows[0]![0]!;
+  const gapX = columns > 1 ? rows[0]![1]!.x - (rows[0]![0]!.x + first.w) : 0;
+  const gapY = rows.length > 1 ? rows[1]![0]!.y - (rows[0]![0]!.y + first.h) : 0;
+  if (gapX < -0.01 || gapY < -0.01) {
+    ctx.warnings.push(`"${node.rawName}": _grid cells overlap — kept absolute positions.`);
+    return undefined;
+  }
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex]!;
+    const expectedY = origin.y + rowIndex * (first.h + gapY);
+    if (!near(row[0]!.y, expectedY)) {
+      ctx.warnings.push(
+        `"${node.rawName}": _grid rows are not evenly spaced — kept absolute positions. Make the row spacing identical or remove _grid.`,
+      );
+      return undefined;
+    }
+    for (let column = 0; column < row.length; column++) {
+      const expectedX = origin.x + column * (first.w + gapX);
+      if (!near(row[column]!.x, expectedX)) {
+        ctx.warnings.push(
+          `"${node.rawName}": _grid columns are not evenly spaced — kept absolute positions. Make the column spacing identical or remove _grid.`,
+        );
+        return undefined;
+      }
+    }
+  }
+
+  return {
+    kind: 'grid',
+    columns,
+    cellW: first.w,
+    cellH: first.h,
+    gapX,
+    gapY,
+    horizontal: groupHorizontal(node, children),
+    vertical: groupVertical(node, children),
+  };
+}
+
+function autoListEligible(node: OdtNode, parsed: ParsedName): boolean {
+  if (node.type === 'TEXT') return false;
+  if (isBaked(node) || hasImageFill(node)) return false;
+  if (parsed.behaviors.some((behavior) => behavior.kind === 'scroll')) return false;
+  if (isInteractive(parsed)) return false;
+  return (node.children?.length ?? 0) >= 3;
+}
+
+function resolveLayout(node: OdtNode, parsed: ParsedName, ctx: Ctx): LayoutPlan | undefined {
+  const wantsList = hasControl(parsed, 'list');
+  const wantsGrid = hasControl(parsed, 'grid');
+
+  if (wantsList && wantsGrid) {
+    ctx.warnings.push(
+      `"${node.rawName}": _list and _grid conflict — _list takes precedence. Remove one tag.`,
+    );
+  }
+
+  if (!wantsList && !wantsGrid) {
+    if (hasControl(parsed, 'nolist')) return undefined;
+    if (!autoListEligible(node, parsed)) return undefined;
+    const detected = detectListPlan(node);
+    if (!detected) return undefined;
+    ctx.warnings.push(
+      `"${node.rawName}": children share even spacing, so they were imported as a UIListLayout. Tag the layer _nolist to keep absolute positions.`,
+    );
+    return { kind: 'list', ...detected };
+  }
+
+  if (isBaked(node) || node.type === 'TEXT') {
+    ctx.warnings.push(
+      `"${node.rawName}": _${wantsList ? 'list' : 'grid'} cannot apply to a ${
+        isBaked(node) ? 'baked image' : 'text layer'
+      } — kept absolute positions. Tag the containing frame instead.`,
+    );
+    return undefined;
+  }
+
+  if (wantsList || wantsGrid) {
+    const tag = wantsList ? 'list' : 'grid';
+    if (parsed.behaviors.some((behavior) => behavior.kind === 'scroll')) {
+      ctx.warnings.push(
+        `"${node.rawName}": _${tag} on a scrolling frame lays the children out but does not expand the canvas. Put _${tag} on a child frame inside the _scroll instead.`,
+      );
+    }
+    if (wantsList) {
+      if (hasControl(parsed, 'nolist')) {
+        ctx.warnings.push(
+          `"${node.rawName}": _nolist only opts out of automatic detection; _list still applies. Remove _nolist to silence this.`,
+        );
+      }
+      return explicitListPlan(node, ctx, 'list');
+    }
+    return gridPlan(node, ctx);
+  }
+  return undefined;
+}
+
+function layoutRanks(children: OdtNode[], plan: LayoutPlan): Map<number, number> {
+  const indices = children
+    .map((_, index) => index)
+    .filter((index) => !hasControl(parseLayerName(children[index]!.rawName), 'ignore'));
+
+  indices.sort((a, b) => {
+    const left = children[a]!;
+    const right = children[b]!;
+    if (plan.kind === 'list') {
+      const axis = plan.direction === 'Vertical' ? left.y - right.y : left.x - right.x;
+      if (axis !== 0) return axis;
+      return plan.direction === 'Vertical' ? left.x - right.x : left.y - right.y;
+    }
+    return left.y - right.y || left.x - right.x;
+  });
+
+  const ranks = new Map<number, number>();
+  indices.forEach((index, rank) => ranks.set(index, rank + 1));
+  return ranks;
+}
+
+function appendLayoutObject(node: OdtNode, plan: LayoutPlan, items: RbxNode): void {
+  const width = Math.max(node.w, EPSILON);
+  const height = Math.max(node.h, EPSILON);
+  const common = {
+    SortOrder: propEnum('SortOrder', 'LayoutOrder'),
+    HorizontalAlignment: propEnum('HorizontalAlignment', plan.horizontal),
+    VerticalAlignment: propEnum('VerticalAlignment', plan.vertical),
+  };
+
+  if (plan.kind === 'list') {
+    const axis = plan.direction === 'Vertical' ? height : width;
+    items.children.unshift({
+      className: 'UIListLayout',
+      name: 'ListLayout',
+      figmaId: `${node.id}:list`,
+      props: {
+        FillDirection: propEnum('FillDirection', plan.direction),
+        Padding: { t: 'udim', v: [round(plan.gap / axis, 5), 0] },
+        ...common,
+      },
+      children: [],
+    });
+    return;
+  }
+
+  items.children.unshift({
+    className: 'UIGridLayout',
+    name: 'GridLayout',
+    figmaId: `${node.id}:grid`,
+    props: {
+      CellSize: propUdim2(plan.cellW / width, 0, plan.cellH / height, 0),
+      CellPadding: propUdim2(plan.gapX / width, 0, plan.gapY / height, 0),
+      FillDirection: propEnum('FillDirection', 'Horizontal'),
+      FillDirectionMaxCells: propNumber(plan.columns),
+      ...common,
+    },
+    children: [],
+  });
+}
+
+/**
+ * Lays children out with a layout object under a child frame named `Items`, so
+ * children added at runtime join the flow instead of overlapping the design.
+ */
+function appendChildren(
+  node: OdtNode,
+  parsed: ParsedName,
+  parent: RbxNode,
+  ctx: Ctx,
+  layout: LayoutPlan | undefined,
+): void {
+  if (!layout) {
+    convertChildren(node, parsed, parent, ctx);
+    return;
+  }
+
+  const items: RbxNode = {
+    className: 'Frame',
+    name: 'Items',
+    figmaId: `${node.id}:items`,
+    props: {
+      Position: propUdim2(0, 0, 0, 0),
+      Size: propUdim2(1, 0, 1, 0),
+      BackgroundTransparency: propNumber(1),
+      BorderSizePixel: propNumber(0),
+    },
+    children: [],
+  };
+
+  const children = node.children ?? [];
+  const ranks = layoutRanks(children, layout);
+  for (let index = 0; index < children.length; index++) {
+    const converted = convertNode(children[index]!, ctx);
+    if (!converted) continue;
+    const rank = ranks.get(index);
+    if (rank !== undefined) converted.props.LayoutOrder = propNumber(rank);
+    items.children.push(converted);
+  }
+
+  appendLayoutObject(node, layout, items);
+  parent.children.push(items);
 }
 
 function textColor(node: OdtNode, text: OdtText): Rgba {
@@ -428,13 +937,18 @@ function addText(
   match: FontMatch,
   /** The caller already explained the font substitution; do not repeat it. */
   fontNoteSuppressed: boolean,
+  /** `_fit`: let the text fill its box instead of keeping the design size. */
+  scaled: boolean,
 ): void {
   const text = node.text!;
   const characters = applyTextCase(text);
 
   props.Text = propString(characters);
   props.Font = { t: 'font', name: match.robloxFont };
-  props.TextScaled = propBoolean(true);
+  // Default keeps the authored point size; TextScaled distorts typography and
+  // an auto-width label has no box to fit. `_fit` opts into it explicitly.
+  props.TextSize = propNumber(text.fontSize);
+  props.TextScaled = propBoolean(scaled);
   props.TextWrapped = propBoolean(true);
   props.TextXAlignment = propEnum('TextXAlignment', textXAlignment(text.alignH));
   props.TextYAlignment = propEnum('TextYAlignment', textYAlignment(text.alignV));
@@ -454,14 +968,78 @@ function hasImageFill(node: OdtNode): boolean {
   return topPaint(node.fills, 'image') !== undefined;
 }
 
+const STATE_KINDS = ['hover', 'clicked', 'default', 'disabled', 'active'] as const;
+const POINTER_KINDS = ['lean', 'magnet'] as const;
+const HOST_KINDS = ['billboard', 'surface', 'prompt'] as const;
+const HOST_DEFAULT_STUDS: Record<(typeof HOST_KINDS)[number], number> = {
+  billboard: 10,
+  surface: 10,
+  prompt: 6,
+};
+
+function stateKind(parsed: ParsedName): (typeof STATE_KINDS)[number] | undefined {
+  return STATE_KINDS.find((kind) => parsed.behaviors.some((behavior) => behavior.kind === kind));
+}
+
 function isInteractive(parsed: ParsedName): boolean {
   return parsed.behaviors.some(
     (behavior) =>
       behavior.kind === 'button' ||
       behavior.kind === 'close' ||
       behavior.kind === 'open' ||
-      behavior.kind === 'tab',
+      behavior.kind === 'toggle' ||
+      behavior.kind === 'exit' ||
+      behavior.kind === 'tab' ||
+      behavior.kind === 'select',
   );
+}
+
+function convertTextboxNode(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode {
+  const text = node.text!;
+  const match = resolveFont(text.fontFamily, text.fontStyle);
+  const color = textColor(node, text);
+  const props: Record<string, RbxValue> = {
+    ...baseGeometry(node, ctx),
+    // The drawn text is a prompt, not a value: the field starts empty.
+    Text: propString(''),
+    PlaceholderText: propString(applyTextCase(text)),
+    PlaceholderColor3: propColor(color),
+    TextColor3: propColor(color),
+    Font: { t: 'font', name: match.robloxFont },
+    TextSize: propNumber(text.fontSize),
+    TextScaled: propBoolean(hasControl(parsed, 'fit')),
+    TextWrapped: propBoolean(true),
+    TextXAlignment: propEnum('TextXAlignment', textXAlignment(text.alignH)),
+    TextYAlignment: propEnum('TextYAlignment', textYAlignment(text.alignV)),
+    ClearTextOnFocus: propBoolean(false),
+    RichText: propBoolean(false),
+    BackgroundTransparency: propNumber(1),
+  };
+  if (node.opacity !== undefined && node.opacity < 1) {
+    props.TextTransparency = propNumber(1 - clamp01(node.opacity));
+  }
+
+  if (parsed.bindings.length > 0) {
+    const names = parsed.bindings.map((binding) => `{${binding.name}}`).join(', ');
+    ctx.warnings.push(
+      `"${node.rawName}": a TextBox cannot bind ${names} — the field starts empty and the drawn text became the placeholder. Use a TextLabel for live values.`,
+    );
+  }
+  if (!match.exact && match.note) {
+    ctx.warnings.push(`"${node.rawName}": ${match.note} — using ${match.robloxFont}`);
+  }
+  const children: RbxNode[] = [];
+  addShadows(node, children, ctx, true);
+
+  const result: RbxNode = {
+    className: 'TextBox',
+    name: sanitizeName(parsed.name),
+    figmaId: node.id,
+    props,
+    children,
+  };
+  attachLayerMeta(result, parsed);
+  return result;
 }
 
 function convertTextNode(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode {
@@ -471,7 +1049,41 @@ function convertTextNode(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode {
   props.BackgroundTransparency = propNumber(1);
 
   const match = resolveFont(node.text!.fontFamily, node.text!.fontStyle);
-  const bake = shouldBakeText(ctx.doc.options.textMode, match);
+  const forceBake = hasControl(parsed, 'bake');
+  const forceLive = hasControl(parsed, 'text');
+  const modeBake = shouldBakeText(ctx.doc.options.textMode, match);
+  const bake = forceBake || (!forceLive && modeBake);
+
+  const asTextbox = hasControl(parsed, 'textbox') || ctx.textboxIds.has(node.id);
+  if (asTextbox) {
+    if (isButtonNode) {
+      ctx.warnings.push(
+        `"${node.rawName}": _textbox and a button behaviour conflict — kept as a ${isButtonNode ? 'TextButton' : 'TextLabel'}. Use a TextLabel for the caption and a separate TextBox for input.`,
+      );
+    } else {
+      if (bake) {
+        ctx.warnings.push(
+          `"${node.rawName}": _textbox stays live, so the bake was skipped. Remove _textbox to bake it, or _txt to keep it live without the warning.`,
+        );
+      }
+      return convertTextboxNode(node, parsed, ctx);
+    }
+  }
+
+  const bindPath = behaviorTarget(parsed, 'bind');
+  if (bake && isBaked(node) && (parsed.bindings.length > 0 || bindPath)) {
+    const names = bindPath
+      ? `_bind:${bindPath}`
+      : parsed.bindings.map((binding) => `{${binding.name}}`).join(', ');
+    ctx.warnings.push(
+      `"${node.rawName}": this layer is baked as an image, so its ${names} binding will not update at runtime. Remove _image or add _txt to keep it live.`,
+    );
+  }
+  if (bake && isBaked(node) && hasControl(parsed, 'fit')) {
+    ctx.warnings.push(
+      `"${node.rawName}": this text is baked as an image, so _fit cannot scale it. Add _txt to keep it live.`,
+    );
+  }
 
   if (bake && isBaked(node)) {
     const imageProps: Record<string, RbxValue> = {
@@ -481,6 +1093,7 @@ function convertTextNode(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode {
       BackgroundTransparency: propNumber(1),
       ImageTransparency: propNumber(1 - clamp01((node.opacity ?? 1) * (node.text!.color?.a ?? 1))),
     };
+    if (isButtonNode) imageProps.AutoButtonColor = propBoolean(false);
     const imageNode: RbxNode = {
       className: isButtonNode ? 'ImageButton' : 'ImageLabel',
       name: sanitizeName(parsed.name),
@@ -488,20 +1101,24 @@ function convertTextNode(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode {
       props: imageProps,
       children: [],
     };
-    attachBehaviorMeta(imageNode, parsed);
+    attachLayerMeta(imageNode, parsed);
     return imageNode;
   }
 
   if (bake) {
-    // The mode asked for this layer to be an image, but the exporter did not
-    // include one. Say what will actually appear, and what fixes it.
-    const modeName = ctx.doc.options.textMode === 'exact' ? 'Exact' : 'Auto';
+    // The layer was asked to be an image, but the export has no raster for it.
+    // Say what will actually appear, and what fixes it.
+    const reason = forceBake
+      ? '_image asks for this text to be rasterized'
+      : `${ctx.doc.options.textMode === 'exact' ? 'Exact' : 'Auto'} mode wants "${node.text!.fontFamily}" baked`;
     ctx.warnings.push(
-      `"${node.rawName}": ${modeName} mode wants "${node.text!.fontFamily}" baked, but this export has no image for it — kept as live text in ${match.robloxFont}. Re-export from Figma to rasterize it.`,
+      `"${node.rawName}": ${reason}, but this export has no image for it — kept as live text in ${match.robloxFont}. Re-export from Figma to rasterize it.`,
     );
   }
 
-  addText(node, props, ctx, match, bake);
+  addText(node, props, ctx, match, bake, hasControl(parsed, 'fit'));
+  if (isButtonNode) props.AutoButtonColor = propBoolean(false);
+  addShadows(node, children, ctx, true);
   if (node.opacity !== undefined && node.opacity < 1) {
     props.TextTransparency = propNumber(1 - clamp01(node.opacity));
   }
@@ -513,33 +1130,69 @@ function convertTextNode(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode {
     props,
     children,
   };
-  attachBehaviorMeta(textNode, parsed);
-  if (parsed.bindings.length > 0) {
+  attachLayerMeta(textNode, parsed);
+  if (bindPath) {
+    if (parsed.bindings.length > 0) {
+      ctx.warnings.push(
+        `"${node.rawName}": _bind and {Attr} placeholders both set the text — _bind wins and the placeholders were ignored. Remove one of them.`,
+      );
+    }
+    textNode.bindPath = bindPath;
+  } else if (parsed.bindings.length > 0) {
     textNode.bindings = parsed.bindings.map((binding) => binding.name);
     textNode.textFormat = textFormatString(applyTextCase(node.text!));
   }
   return textNode;
 }
 
-function convertImageNode(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode | undefined {
+function keptChildren(node: OdtNode, ctx: Ctx): OdtNode[] {
+  const kept: OdtNode[] = [];
+  let skipped = 0;
+  for (const child of node.children ?? []) {
+    if (hasControl(parseLayerName(child.rawName), 'keep')) {
+      kept.push(child);
+    } else {
+      skipped += 1;
+    }
+  }
+  if (skipped > 0) {
+    ctx.warnings.push(
+      `"${node.rawName}" was baked as one image; ${skipped} child layer${
+        skipped === 1 ? '' : 's'
+      } without _keep were part of that raster and were not imported as instances. Tag children that must stay editable with _keep.`,
+    );
+  }
+  return kept;
+}
+
+function convertImageNode(
+  node: OdtNode,
+  parsed: ParsedName,
+  ctx: Ctx,
+  /** The raster contains the layer and its children; only _keep children stay live. */
+  baked = false,
+  layout?: LayoutPlan,
+): RbxNode | undefined {
   const fill = topPaint(node.fills, 'image');
   const isButtonNode = isInteractive(parsed);
   const className = isButtonNode ? 'ImageButton' : 'ImageLabel';
-  const imageRef = fill && fill.type === 'image' ? fill.ref : node.imageRef;
+  const imageRef = baked ? node.imageRef : fill && fill.type === 'image' ? fill.ref : node.imageRef;
   if (!imageRef) return undefined;
 
   const opacity = node.opacity ?? 1;
-  const fillOpacity = fill && fill.type === 'image' ? (fill.opacity ?? 1) : 1;
+  const fillOpacity = !baked && fill && fill.type === 'image' ? (fill.opacity ?? 1) : 1;
   const props: Record<string, RbxValue> = {
     ...baseGeometry(node, ctx),
     Image: propString(imageValue(ctx, imageRef)),
     ScaleType: propEnum(
       'ScaleType',
-      imageScaleType(fill && fill.type === 'image' ? fill.scaleMode : 'fill'),
+      baked ? 'Stretch' : imageScaleType(fill && fill.type === 'image' ? fill.scaleMode : 'fill'),
     ),
     BackgroundTransparency: propNumber(1),
-    ImageTransparency: propNumber(1 - clamp01(opacity * fillOpacity)),
+    // A baked raster already includes the layer's opacity and fill alpha.
+    ImageTransparency: propNumber(baked ? 0 : 1 - clamp01(opacity * fillOpacity)),
   };
+  if (isButtonNode) props.AutoButtonColor = propBoolean(false);
   if (node.clipsContent) props.ClipsDescendants = propBoolean(true);
 
   const result: RbxNode = {
@@ -549,22 +1202,36 @@ function convertImageNode(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode 
     props,
     children: [],
   };
-  attachBehaviorMeta(result, parsed);
-  convertChildren(node, parsed, result, {
-    ...ctx,
-    parentW: node.w,
-    parentH: node.h,
-  });
-  addCorner(node, result.children, ctx);
+  attachLayerMeta(result, parsed);
+
+  const childCtx: Ctx = childContext(ctx, node, parsed);
+
+  if (baked) {
+    for (const child of keptChildren(node, ctx)) {
+      const converted = convertNode(child, childCtx);
+      if (converted) result.children.push(converted);
+    }
+  } else {
+    appendChildren(node, parsed, result, childCtx, layout);
+    addCorner(node, result.children, ctx);
+    addShadows(node, result.children, ctx, false);
+  }
+
   return result;
 }
 
-function convertScrollingFrame(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode {
+function convertScrollingFrame(
+  node: OdtNode,
+  parsed: ParsedName,
+  ctx: Ctx,
+  layout?: LayoutPlan,
+): RbxNode {
   const children: RbxNode[] = [];
   const props: Record<string, RbxValue> = baseGeometry(node, ctx);
   addFillProps(node, props, children, ctx);
   addStroke(node, children, ctx);
   addCorner(node, children, ctx);
+  addShadows(node, children, ctx, false);
 
   const overflowsY = (node.children ?? []).some((child) => child.y + child.h > node.h + 0.5);
   const overflowsX = (node.children ?? []).some((child) => child.x + child.w > node.w + 0.5);
@@ -583,13 +1250,14 @@ function convertScrollingFrame(node: OdtNode, parsed: ParsedName, ctx: Ctx): Rbx
     props,
     children,
   };
-  attachBehaviorMeta(result, parsed);
-  convertChildren(node, parsed, result, {
-    ...ctx,
-    parentW: node.w,
-    parentH: node.h,
-    opacity: ctx.opacity,
-  });
+  attachLayerMeta(result, parsed);
+  appendChildren(
+    node,
+    parsed,
+    result,
+    childContext(ctx, node, parsed, { opacity: ctx.opacity }),
+    layout,
+  );
   return result;
 }
 
@@ -598,9 +1266,18 @@ function convertFrameNode(
   parsed: ParsedName,
   ctx: Ctx,
   forceClassName?: 'TextButton' | 'Frame',
+  layout?: LayoutPlan,
 ): RbxNode {
   const opacity = node.opacity ?? 1;
-  const useCanvasGroup = opacity < 0.999 && hasChildren(node) && !isBaked(node) && !forceClassName;
+  const forceCanvas = hasControl(parsed, 'canvas');
+  if (forceCanvas && forceClassName === 'TextButton') {
+    ctx.warnings.push(
+      `"${node.rawName}": _canvas cannot force a CanvasGroup on an interactive layer — kept as ${forceClassName}. Wrap it in a plain _canvas frame instead.`,
+    );
+  }
+  const useCanvasGroup = forceClassName
+    ? false
+    : forceCanvas || (opacity < 0.999 && hasChildren(node) && !isBaked(node));
   const className = forceClassName ?? (useCanvasGroup ? 'CanvasGroup' : 'Frame');
   const children: RbxNode[] = [];
   const props: Record<string, RbxValue> = baseGeometry(node, ctx);
@@ -608,6 +1285,7 @@ function convertFrameNode(
   addFillProps(node, props, children, ctx);
   addStroke(node, children, ctx);
   addCorner(node, children, ctx);
+  addShadows(node, children, ctx, false);
 
   if (useCanvasGroup) {
     props.GroupTransparency = propNumber(1 - clamp01(opacity));
@@ -620,31 +1298,297 @@ function convertFrameNode(
     props,
     children,
   };
-  attachBehaviorMeta(result, parsed);
+  attachLayerMeta(result, parsed);
 
-  const childCtx: Ctx = {
-    ...ctx,
-    parentW: node.w,
-    parentH: node.h,
+  const childCtx: Ctx = childContext(ctx, node, parsed, {
     opacity: useCanvasGroup ? 1 : ctx.opacity * opacity,
-  };
-  convertChildren(node, parsed, result, childCtx);
+  });
+  appendChildren(node, parsed, result, childCtx, layout);
   return result;
 }
 
-function attachBehaviorMeta(target: RbxNode, parsed: ParsedName): void {
+function attachLayerMeta(target: RbxNode, parsed: ParsedName): void {
   if (parsed.behaviors.length > 0) target.behaviors = parsed.behaviors;
+  if (parsed.controls.length > 0) target.controls = parsed.controls;
+}
+
+/**
+ * Conflicting or inapplicable controls are resolved deterministically and
+ * reported. Precedence: _ignore > _image > _txt / _frame > automatic.
+ */
+function warnControlConflicts(node: OdtNode, parsed: ParsedName, ctx: Ctx): void {
+  const bake = hasControl(parsed, 'bake');
+
+  if (bake && hasControl(parsed, 'text')) {
+    ctx.warnings.push(
+      `"${node.rawName}": _image and _txt conflict — _image takes precedence. Remove one tag.`,
+    );
+  }
+  if (bake && hasControl(parsed, 'frame')) {
+    ctx.warnings.push(
+      `"${node.rawName}": _image and _frame conflict — _image takes precedence. Remove one tag.`,
+    );
+  }
+  if (parsed.behaviors.some((behavior) => behavior.kind === 'nopointer')) {
+    const reactive = parsed.behaviors.some(
+      (behavior) => behavior.kind === 'lean' || behavior.kind === 'magnet',
+    );
+    if (reactive) {
+      ctx.warnings.push(
+        `"${node.rawName}": _nopointer cancels _lean / _magnet on the same layer. Remove one of them.`,
+      );
+    }
+  }
+  const scroll = parsed.behaviors.some((behavior) => behavior.kind === 'scroll');
+  if (bake && scroll && isBaked(node)) {
+    ctx.warnings.push(
+      `"${node.rawName}": _image and _scroll conflict — _image takes precedence, so this layer is an image and the scroll behaviour was not applied. Remove one tag.`,
+    );
+  }
+  if (bake && node.type !== 'TEXT' && !isBaked(node) && !hasImageFill(node)) {
+    ctx.warnings.push(
+      `"${node.rawName}": _image asks for this layer to be rasterized, but this export has no image for it — kept as live layers. Re-export from Figma to rasterize it.`,
+    );
+  }
+  if (hasControl(parsed, 'frame') && !bake && isBaked(node) && node.type !== 'TEXT') {
+    ctx.warnings.push(
+      `"${node.rawName}": _frame cannot keep a ${node.type} as an editable Frame — this export only has a raster. Convert it to a Frame in Figma or remove _frame.`,
+    );
+  }
+  if (hasControl(parsed, 'frame') && !bake && node.type === 'TEXT') {
+    ctx.warnings.push(
+      `"${node.rawName}": _frame does not apply to text layers — use _txt to keep them live.`,
+    );
+  }
+  if (hasControl(parsed, 'text') && node.type !== 'TEXT') {
+    ctx.warnings.push(
+      `"${node.rawName}": _txt only affects text layers — ignored on ${node.type}. Tag the text layer itself.`,
+    );
+  }
+  if (behaviorTarget(parsed, 'bind') !== undefined && node.type !== 'TEXT') {
+    ctx.warnings.push(
+      `"${node.rawName}": _bind only affects text layers — ignored on ${node.type}. Tag the text layer itself.`,
+    );
+  }
+  if (hasControl(parsed, 'fit') && node.type !== 'TEXT') {
+    ctx.warnings.push(
+      `"${node.rawName}": _fit only affects text layers — ignored on ${node.type}. Tag the text layer itself.`,
+    );
+  }
+  const bareTab = parsed.behaviors.some(
+    (behavior) => (behavior.kind === 'tab' || behavior.kind === 'page') && !behavior.target,
+  );
+  if (bareTab && ctx.tabGroupDepth === 0) {
+    ctx.warnings.push(
+      `"${node.rawName}": _tab / _page without a target need a _tabgroup ancestor. Add a frame tagged _tabgroup around the tabs and pages, or write _tab:Group.`,
+    );
+  }
+  if (
+    parsed.behaviors.some((behavior) => behavior.kind === 'tabgroup') &&
+    (node.type === 'TEXT' || isBaked(node))
+  ) {
+    ctx.warnings.push(
+      `"${node.rawName}": _tabgroup must be a frame containing the tabs and pages — it was ignored on this ${node.type}.`,
+    );
+  }
+
+  const hostTag = HOST_KINDS.find((kind) =>
+    parsed.behaviors.some((behavior) => behavior.kind === kind),
+  );
+  if (hostTag && ctx.hostDepth > 0) {
+    ctx.warnings.push(
+      `"${node.rawName}": _${hostTag} only applies to the exported root frame — it was ignored here. Select this layer as the root, or move it to its own frame.`,
+    );
+  }
+
+  if (hasControl(parsed, 'canvas')) {
+    const scroll = parsed.behaviors.some((behavior) => behavior.kind === 'scroll');
+    const image = hasImageFill(node) || isBaked(node);
+    if (node.type === 'TEXT' || scroll || image) {
+      const instead = scroll
+        ? 'ScrollingFrame'
+        : image
+          ? 'ImageLabel or ImageButton'
+          : 'TextLabel or TextButton';
+      ctx.warnings.push(
+        `"${node.rawName}": _canvas cannot force a CanvasGroup here — kept as ${instead}. Wrap the layer in a plain _canvas frame if the fade must apply to the group.`,
+      );
+    }
+  }
+}
+
+function applyAspectConstraint(result: RbxNode, node: OdtNode, parsed: ParsedName, ctx: Ctx): void {
+  if (!hasControl(parsed, 'aspect')) return;
+  if (node.h <= EPSILON) {
+    ctx.warnings.push(
+      `"${node.rawName}": _aspect needs a non-zero height to compute a ratio — constraint skipped.`,
+    );
+    return;
+  }
+  result.children.push({
+    className: 'UIAspectRatioConstraint',
+    name: 'AspectRatio',
+    figmaId: `${node.id}:aspect`,
+    props: {
+      AspectRatio: propNumber(node.w / node.h),
+      AspectType: propEnum('AspectType', 'FitWithinMaxSize'),
+      DominantAxis: propEnum('DominantAxis', 'Width'),
+    },
+    children: [],
+  });
+}
+
+/**
+ * `_hold` turns a stroke into a left-to-right fill. The stroke's gradient is
+ * hidden at import and swept by the generated prompt controller.
+ */
+function applyHold(result: RbxNode, node: OdtNode, parsed: ParsedName, ctx: Ctx): void {
+  const behavior = parsed.behaviors.find((entry) => entry.kind === 'hold');
+  if (!behavior) return;
+
+  const stroke = result.children.find((child) => child.className === 'UIStroke');
+  if (!stroke) {
+    ctx.warnings.push(
+      `"${node.rawName}": _hold animates a UIStroke, but this layer has no stroke. Add a stroke in Figma so the prompt has something to fill.`,
+    );
+    return;
+  }
+  if (stroke.children.some((child) => child.className === 'UIGradient')) {
+    ctx.warnings.push(
+      `"${node.rawName}": _hold needs the stroke's gradient slot, but this stroke already has a gradient — the hold fill was not added. Use a solid stroke for the hold ring.`,
+    );
+    return;
+  }
+
+  let seconds = 1;
+  if (behavior.target !== undefined) {
+    const parsedSeconds = Number(behavior.target);
+    if (Number.isFinite(parsedSeconds) && parsedSeconds > 0) {
+      seconds = parsedSeconds;
+    } else {
+      ctx.warnings.push(
+        `"${node.rawName}": _hold expects a duration in seconds (for example _hold:1.5) — using 1 s.`,
+      );
+    }
+  }
+  ctx.holdDurations.push(seconds);
+
+  stroke.children.push({
+    className: 'UIGradient',
+    name: 'HoldGradient',
+    figmaId: `${node.id}:hold`,
+    props: {
+      // ColorSequence needs at least two keypoints; white leaves the stroke's
+      // own colour untouched.
+      Color: {
+        t: 'colorsequence',
+        v: [
+          { t: 0, color: [1, 1, 1], transparency: 0 },
+          { t: 1, color: [1, 1, 1], transparency: 0 },
+        ],
+      },
+      // Opaque until the very end, so sweeping the offset reveals the stroke
+      // from left to right with a hard leading edge.
+      Transparency: {
+        t: 'numbersequence',
+        v: [
+          { t: 0, value: 0 },
+          { t: 0.9999, value: 0 },
+          { t: 1, value: 1 },
+        ],
+      },
+      // Fully transparent at rest: the whole stroke samples the endpoint.
+      Offset: { t: 'vector2', v: [1, 0] },
+      Rotation: propNumber(0),
+    },
+    children: [],
+  });
 }
 
 function convertNode(node: OdtNode, ctx: Ctx): RbxNode | undefined {
   const parsed = parseLayerName(node.rawName);
-  describeEffects(node.effects, ctx.warnings, node.rawName);
 
+  if (hasControl(parsed, 'ignore')) return undefined;
+
+  const state = stateKind(parsed);
+  if (state && !isInteractive(parsed) && ctx.interactiveDepth === 0) {
+    ctx.warnings.push(
+      `"${node.rawName}": _${state} is a button state layer and needs an interactive ancestor — it was imported hidden and will never show. Put it inside a _button (or _tab / _open / _close) layer.`,
+    );
+  }
+  for (const kind of POINTER_KINDS) {
+    if (
+      parsed.behaviors.some((behavior) => behavior.kind === kind) &&
+      !isInteractive(parsed) &&
+      ctx.interactiveDepth === 0
+    ) {
+      ctx.warnings.push(
+        `"${node.rawName}": _${kind} reacts to the pointer and needs an interactive layer — it has no effect on a plain frame. Add _button to this layer or tag a button instead.`,
+      );
+    }
+  }
+
+  warnControlConflicts(node, parsed, ctx);
+  warnUnsupportedEffects(node.effects, ctx.warnings, node.rawName);
+
+  const result = convertNodeCore(node, parsed, ctx);
+  if (!result) return undefined;
+  applyAspectConstraint(result, node, parsed, ctx);
+  applyHold(result, node, parsed, ctx);
+
+  if (
+    parsed.behaviors.some((behavior) => behavior.kind === 'select') &&
+    !result.children.some((child) => child.className === 'UIStroke')
+  ) {
+    ctx.warnings.push(
+      `"${node.rawName}": _select animates an outline, but this layer has no stroke to reveal. Add a stroke in Figma, or the selection will only set the FWSelected attributes.`,
+    );
+  }
+  return result;
+}
+
+/**
+ * `_textbox` on a container applies to its first visible direct text child.
+ * Only the first one: a second text layer is usually a label, not an input.
+ */
+function markInheritedTextbox(node: OdtNode, parsed: ParsedName, ctx: Ctx): void {
+  if (!hasControl(parsed, 'textbox') || node.type === 'TEXT') return;
+
+  if (isBaked(node)) {
+    ctx.warnings.push(
+      `"${node.rawName}": _textbox cannot apply because this layer is baked as one image — kept as an image. Put _input on a live text layer or remove _image.`,
+    );
+    return;
+  }
+
+  const child = (node.children ?? []).find(
+    (candidate) =>
+      candidate.type === 'TEXT' &&
+      candidate.text !== undefined &&
+      candidate.visible !== false &&
+      !hasControl(parseLayerName(candidate.rawName), 'ignore'),
+  );
+
+  if (!child) {
+    ctx.warnings.push(
+      `"${node.rawName}": _textbox found no visible direct text child — the tag did nothing. Tag the text layer itself, or add one inside this frame.`,
+    );
+    return;
+  }
+  ctx.textboxIds.add(child.id);
+}
+
+function convertNodeCore(node: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode | undefined {
   const behaviors = new Set(parsed.behaviors.map((behavior) => behavior.kind));
-  const hiddenByTag = behaviors.has('closed') || behaviors.has('page');
+  const hiddenByTag =
+    behaviors.has('closed') ||
+    behaviors.has('page') ||
+    STATE_KINDS.some((kind) => behaviors.has(kind));
+  const layout = resolveLayout(node, parsed, ctx);
+  markInheritedTextbox(node, parsed, ctx);
 
-  if (behaviors.has('scroll')) {
-    const result = convertScrollingFrame(node, parsed, ctx);
+  if (behaviors.has('scroll') && !isBaked(node)) {
+    const result = convertScrollingFrame(node, parsed, ctx, layout);
     if (hiddenByTag) result.props.Visible = propBoolean(false);
     return result;
   }
@@ -655,8 +1599,10 @@ function convertNode(node: OdtNode, ctx: Ctx): RbxNode | undefined {
     return result;
   }
 
-  if (isBaked(node) && !hasChildren(node)) {
-    const result = convertImageNode(node, parsed, ctx);
+  // Any baked layer wins over its children: the raster already contains them
+  // unless they are tagged _keep.
+  if (isBaked(node)) {
+    const result = convertImageNode(node, parsed, ctx, true);
     if (result) {
       if (hiddenByTag) result.props.Visible = propBoolean(false);
       return result;
@@ -664,7 +1610,7 @@ function convertNode(node: OdtNode, ctx: Ctx): RbxNode | undefined {
   }
 
   if (hasImageFill(node)) {
-    const result = convertImageNode(node, parsed, ctx);
+    const result = convertImageNode(node, parsed, ctx, false, layout);
     if (result) {
       if (hiddenByTag) result.props.Visible = propBoolean(false);
       return result;
@@ -672,7 +1618,7 @@ function convertNode(node: OdtNode, ctx: Ctx): RbxNode | undefined {
   }
 
   if (node.type === 'ELLIPSE' && !hasChildren(node) && node.w === node.h) {
-    const result = convertFrameNode(node, parsed, ctx);
+    const result = convertFrameNode(node, parsed, ctx, undefined, layout);
     result.children.push({
       className: 'UICorner',
       name: 'Corner',
@@ -691,15 +1637,34 @@ function convertNode(node: OdtNode, ctx: Ctx): RbxNode | undefined {
   // A tagged interactive layer without text or an image needs a button class
   // to receive input; TextButton with empty text renders like a Frame.
   if (isInteractive(parsed)) {
-    const result = convertFrameNode(node, parsed, ctx, 'TextButton');
+    const result = convertFrameNode(node, parsed, ctx, 'TextButton', layout);
     result.props.AutoButtonColor = propBoolean(false);
     if (hiddenByTag) result.props.Visible = propBoolean(false);
     return result;
   }
 
-  const result = convertFrameNode(node, parsed, ctx);
+  const result = convertFrameNode(node, parsed, ctx, undefined, layout);
   if (hiddenByTag) result.props.Visible = propBoolean(false);
   return result;
+}
+
+/** Context for a node's children, tracking `_tabgroup` nesting. */
+function childContext(
+  ctx: Ctx,
+  node: OdtNode,
+  parsed: ParsedName,
+  overrides: Partial<Ctx> = {},
+): Ctx {
+  const opensGroup = parsed.behaviors.some((behavior) => behavior.kind === 'tabgroup');
+  return {
+    ...ctx,
+    parentW: node.w,
+    parentH: node.h,
+    tabGroupDepth: ctx.tabGroupDepth + (opensGroup ? 1 : 0),
+    interactiveDepth: ctx.interactiveDepth + (isInteractive(parsed) ? 1 : 0),
+    hostDepth: Math.max(ctx.hostDepth, 1),
+    ...overrides,
+  };
 }
 
 function convertChildren(node: OdtNode, _parsed: ParsedName, parent: RbxNode, ctx: Ctx): void {
@@ -707,6 +1672,129 @@ function convertChildren(node: OdtNode, _parsed: ParsedName, parent: RbxNode, ct
     const converted = convertNode(child, ctx);
     if (converted) parent.children.push(converted);
   }
+}
+
+/**
+ * Read the root host tag. Only one host tag may be used; the first in
+ * HOST_KINDS order wins and the conflict is reported.
+ */
+function resolveHost(parsed: ParsedName, root: OdtNode, ctx: Ctx): RbxHost {
+  const used = HOST_KINDS.filter((kind) =>
+    parsed.behaviors.some((behavior) => behavior.kind === kind),
+  );
+  if (used.length > 1) {
+    ctx.warnings.push(
+      `"${root.rawName}": ${used.map((kind) => `_${kind}`).join(' and ')} conflict — only one host tag may be used. _${used[0]} takes precedence.`,
+    );
+  }
+
+  const kind = used[0];
+  if (!kind) return { kind: 'screen' };
+
+  let studs = HOST_DEFAULT_STUDS[kind];
+  const target = behaviorTarget(parsed, kind);
+  if (target !== undefined) {
+    const value = Number(target);
+    if (Number.isFinite(value) && value > 0) {
+      studs = value;
+    } else {
+      ctx.warnings.push(
+        `"${root.rawName}": _${kind} expects a width in studs (for example _${kind}:12) — using ${studs}.`,
+      );
+    }
+  }
+
+  const aspect = root.w > EPSILON ? root.h / root.w : 1;
+  const name = `${sanitizeName(parsed.name)} Anchor`;
+  return {
+    kind,
+    studs,
+    anchor: {
+      name,
+      // SurfaceGui stretches its canvas across the part face, so the part
+      // carries the intended stud size. BillboardGui size is relative to a
+      // 1×1×1 anchor.
+      size: kind === 'surface' ? [studs, round(studs * aspect, 3), 0.2] : [1, 1, 1],
+      // Designs carry no world coordinates; the anchor lands near the origin
+      // and the importer says so.
+      position: [0, 5, -10],
+    },
+  };
+}
+
+function promptSpec(root: OdtNode, parsed: ParsedName, ctx: Ctx): RbxNode {
+  const holdDuration = ctx.holdDurations.length > 0 ? Math.max(...ctx.holdDurations) : 0;
+  return {
+    className: 'ProximityPrompt',
+    name: `${sanitizeName(parsed.name)} Prompt`,
+    figmaId: `${root.id}:prompt`,
+    props: {
+      Style: propEnum('ProximityPromptStyle', 'Custom'),
+      ActionText: propString('Interact'),
+      ObjectText: propString(sanitizeName(parsed.name)),
+      HoldDuration: propNumber(holdDuration),
+      MaxActivationDistance: propNumber(10),
+      // Line of sight was deliberately left off: custom UI should not be
+      // hidden by an intervening prop the designer cannot see in Figma.
+      RequiresLineOfSight: propBoolean(false),
+      KeyboardKeyCode: propEnum('KeyCode', 'E'),
+      GamepadKeyCode: propEnum('KeyCode', 'ButtonX'),
+      ClickablePrompt: propBoolean(true),
+      Enabled: propBoolean(true),
+    },
+    children: [],
+  };
+}
+
+/** LayerCollector properties for the chosen host. */
+function screenHostProps(
+  host: RbxHost,
+  doc: OdtDocument,
+  aspectRatio: number,
+): Record<string, RbxValue> {
+  const clips: Record<string, RbxValue> = doc.root.clipsContent
+    ? { ClipsDescendants: propBoolean(true) }
+    : {};
+
+  if (host.kind === 'screen') {
+    return {
+      ResetOnSpawn: propBoolean(false),
+      IgnoreGuiInset: propBoolean(true),
+      ZIndexBehavior: propEnum('ZIndexBehavior', 'Sibling'),
+      DisplayOrder: propNumber(1),
+      Enabled: propBoolean(true),
+    };
+  }
+
+  if (host.kind === 'surface') {
+    return {
+      Face: propEnum('NormalId', 'Front'),
+      SizingMode: propEnum('SurfaceGuiSizingMode', 'FixedSize'),
+      CanvasSize: { t: 'vector2', v: [round(doc.root.w), round(doc.root.h)] },
+      LightInfluence: propNumber(0),
+      MaxDistance: propNumber(100),
+      AlwaysOnTop: propBoolean(false),
+      ZIndexBehavior: propEnum('ZIndexBehavior', 'Sibling'),
+      ResetOnSpawn: propBoolean(false),
+      ...clips,
+    };
+  }
+
+  const studs = host.studs ?? HOST_DEFAULT_STUDS.billboard;
+  return {
+    // Scale is relative to the 1×1×1 anchor part, so this is width × height
+    // in studs.
+    Size: propUdim2(studs, 0, studs / aspectRatio, 0),
+    StudsOffset: propVector3(0, 0, 0),
+    AlwaysOnTop: propBoolean(false),
+    LightInfluence: propNumber(0),
+    MaxDistance: propNumber(100),
+    Brightness: propNumber(1),
+    Active: propBoolean(true),
+    ZIndexBehavior: propEnum('ZIndexBehavior', 'Sibling'),
+    ResetOnSpawn: propBoolean(false),
+    ...clips,
+  };
 }
 
 /** Build a ScreenGui-level spec from a validated ODT document. */
@@ -724,9 +1812,28 @@ export function convertDocument(doc: OdtDocument): RbxDocument {
     warnings,
     doc,
     imageAsset: (ref) => assets.get(ref),
+    textboxIds: new Set<string>(),
+    tabGroupDepth: 0,
+    interactiveDepth: 0,
+    hostDepth: 0,
+    holdDurations: [],
   };
 
   const rootParsed = parseLayerName(doc.root.rawName);
+  if (hasControl(rootParsed, 'ignore')) {
+    throw new Error(
+      `The selected root "${doc.root.rawName}" is tagged _ignore, so there is nothing to import. Remove the tag or select another frame.`,
+    );
+  }
+  warnControlConflicts(doc.root, rootParsed, ctx);
+  const host = resolveHost(rootParsed, doc.root, ctx);
+  if (hasControl(rootParsed, 'list') || hasControl(rootParsed, 'grid')) {
+    warnings.push(
+      `"${doc.root.rawName}": _list and _grid are not supported on the root frame — kept absolute positions. Move the tag to a child frame instead.`,
+    );
+  }
+
+  const rootBaked = isBaked(doc.root);
   const rootChildren: RbxNode[] = [];
   const rootProps: Record<string, RbxValue> = {
     Position: propUdim2(0, 0, 0, 0),
@@ -734,38 +1841,63 @@ export function convertDocument(doc: OdtDocument): RbxDocument {
     BorderSizePixel: propNumber(0),
   };
 
-  addFillProps(doc.root, rootProps, rootChildren, ctx);
-  addStroke(doc.root, rootChildren, ctx);
-  addCorner(doc.root, rootChildren, ctx);
+  const childCtx: Ctx = childContext(ctx, doc.root, rootParsed, { opacity: 1 });
+  markInheritedTextbox(doc.root, rootParsed, ctx);
+
+  if (rootBaked) {
+    // The whole design is one raster. Only _keep children survive as instances.
+    rootProps.Image = propString(imageValue(ctx, doc.root.imageRef!));
+    rootProps.ScaleType = propEnum('ScaleType', 'Stretch');
+    rootProps.BackgroundTransparency = propNumber(1);
+    rootProps.ImageTransparency = propNumber(0);
+    for (const child of keptChildren(doc.root, ctx)) {
+      const converted = convertNode(child, childCtx);
+      if (converted) rootChildren.push(converted);
+    }
+  } else {
+    addFillProps(doc.root, rootProps, rootChildren, ctx);
+    addStroke(doc.root, rootChildren, ctx);
+    addCorner(doc.root, rootChildren, ctx);
+    addShadows(doc.root, rootChildren, ctx, false);
+
+    if (doc.root.rotation && Math.abs(doc.root.rotation) > EPSILON) {
+      // The root carries the aspect constraint; rotating it would fight the
+      // constraint, so the design is imported upright and the import says so.
+      warnings.push(`Root rotation on "${doc.root.rawName}" was not applied`);
+    }
+    if (doc.root.opacity !== undefined && doc.root.opacity < 0.999) {
+      warnings.push(`Root opacity on "${doc.root.rawName}" was not applied`);
+    }
+    for (const child of doc.root.children ?? []) {
+      const converted = convertNode(child, childCtx);
+      if (converted) rootChildren.push(converted);
+    }
+  }
 
   if (doc.root.clipsContent) rootProps.ClipsDescendants = propBoolean(true);
-  if (doc.root.rotation && Math.abs(doc.root.rotation) > EPSILON) {
-    // The root carries the aspect constraint; rotating it would fight the
-    // constraint, so the design is imported upright and the import says so.
-    warnings.push(`Root rotation on "${doc.root.rawName}" was not applied`);
-  }
-  if (doc.root.opacity !== undefined && doc.root.opacity < 0.999) {
-    warnings.push(`Root opacity on "${doc.root.rawName}" was not applied`);
-  }
 
   const aspectRatio = doc.root.h > EPSILON ? doc.root.w / doc.root.h : 1;
 
+  const rootClassName = rootBaked
+    ? isInteractive(rootParsed)
+      ? 'ImageButton'
+      : 'ImageLabel'
+    : hasControl(rootParsed, 'canvas')
+      ? 'CanvasGroup'
+      : 'Frame';
+  if (rootClassName === 'CanvasGroup') {
+    rootProps.GroupTransparency = propNumber(0);
+  }
+
   const rootFrame: RbxNode = {
-    className: 'Frame',
+    className: rootClassName,
     name: sanitizeName(rootParsed.name),
     figmaId: doc.root.id,
     props: rootProps,
     children: rootChildren,
   };
-  attachBehaviorMeta(rootFrame, rootParsed);
-
-  const childCtx: Ctx = {
-    ...ctx,
-    parentW: doc.root.w,
-    parentH: doc.root.h,
-    opacity: 1,
-  };
-  convertChildren(doc.root, rootParsed, rootFrame, childCtx);
+  attachLayerMeta(rootFrame, rootParsed);
+  applyHold(rootFrame, doc.root, rootParsed, ctx);
 
   rootFrame.children.push({
     className: 'UIAspectRatioConstraint',
@@ -780,18 +1912,28 @@ export function convertDocument(doc: OdtDocument): RbxDocument {
   });
 
   const screenGui: RbxNode = {
-    className: 'ScreenGui',
+    className:
+      host.kind === 'surface'
+        ? 'SurfaceGui'
+        : host.kind === 'screen'
+          ? 'ScreenGui'
+          : 'BillboardGui',
     name: sanitizeName(rootParsed.name),
-    figmaId: `screengui:${doc.root.id}`,
-    props: {
-      ResetOnSpawn: propBoolean(false),
-      IgnoreGuiInset: propBoolean(true),
-      ZIndexBehavior: propEnum('ZIndexBehavior', 'Sibling'),
-      DisplayOrder: propNumber(1),
-      Enabled: propBoolean(true),
-    },
+    figmaId: `${host.kind}:${doc.root.id}`,
+    props: screenHostProps(host, doc, aspectRatio),
     children: [rootFrame],
   };
+
+  if (host.kind === 'prompt') {
+    // A custom-style prompt renders the design instead of the default popup.
+    host.prompt = promptSpec(doc.root, rootParsed, ctx);
+  }
+  if (ctx.holdDurations.length > 0 && host.kind !== 'prompt') {
+    const seconds = Math.max(...ctx.holdDurations);
+    warnings.push(
+      `_hold:${seconds} needs a _prompt root to drive it — this import has no ProximityPrompt, so the ring stays hidden. Tag the root with _prompt or remove _hold.`,
+    );
+  }
 
   const imageRefs = new Set<string>();
   const collect = (node: OdtNode): void => {
@@ -813,6 +1955,7 @@ export function convertDocument(doc: OdtDocument): RbxDocument {
   return {
     version: 1,
     screenGui,
+    host,
     warnings,
     meta: {
       name: screenGui.name,

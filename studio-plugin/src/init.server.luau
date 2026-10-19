@@ -172,6 +172,13 @@ local function importSpec(code: string, fromLive: boolean): boolean
 	lastRevision = tonumber(data.revision) or 0
 
 	local message = string.format("Imported %d nodes from %s.", report.created, code)
+	if report.host and report.host ~= "screen" then
+		message ..= string.format(
+			" Placed as a %s on the anchor %q in Workspace/figrbx — move it into position.",
+			report.host,
+			report.anchor or "anchor"
+		)
+	end
 	if #report.skipped > 0 then
 		message ..= string.format(" %d unsupported nodes skipped.", #report.skipped)
 	end

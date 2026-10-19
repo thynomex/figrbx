@@ -6,7 +6,13 @@
  * the UI, which owns all network traffic. Nothing here reaches the network.
  */
 
-import { type FontMatch, resolveFont, shouldBakeText } from '@figrbx/core';
+import {
+  type FontMatch,
+  hasControl,
+  parseLayerName,
+  resolveFont,
+  shouldBakeText,
+} from '@figrbx/core';
 import type {
   OdtDocument,
   OdtEffect,
@@ -53,6 +59,9 @@ const MAX_IMAGES = 1000;
 
 let settings: Settings = { ...DEFAULT_SETTINGS };
 let liveSyncTimer: ReturnType<typeof setTimeout> | null = null;
+/** Set while raster export temporarily hides layers; see exportRaster. */
+let suppressingDocumentChanges = false;
+let suppressionTimer: ReturnType<typeof setTimeout> | null = null;
 let exporting = false;
 
 figma.showUI(__html__, { width: 420, height: 620, themeColors: true });
@@ -336,6 +345,7 @@ function serializeEffects(node: SceneNode): OdtEffect[] | undefined {
   if (!effects || effects.length === 0) return undefined;
   const result: OdtEffect[] = [];
   for (const effect of effects) {
+    if (effect.visible === false) continue;
     if (effect.type === 'DROP_SHADOW') {
       result.push({
         type: 'drop-shadow',
@@ -534,50 +544,147 @@ function shouldBakeNode(node: SceneNode): boolean {
   }
 }
 
-async function serializeNode(node: SceneNode, ctx: Ctx, isRoot = false): Promise<OdtNode> {
-  ctx.counter.nodes += 1;
-  if (ctx.counter.nodes > MAX_NODES) {
+/**
+ * Figma nodes that must be hidden while an ancestor's raster is exported:
+ * `_ignore` subtrees vanish at any depth, and direct `_keep` children are
+ * exported separately so they stay editable. Deeper `_keep` layers stay in the
+ * raster because only direct children survive the bake.
+ */
+function collectHiddenForRaster(root: SceneNode): SceneNode[] {
+  if (!isContainer(root)) return [];
+  const hidden: SceneNode[] = [];
+  const walk = (parent: SceneNode, direct: boolean): void => {
+    for (const child of (parent as any).children as SceneNode[]) {
+      const parsed = parseLayerName(child.name);
+      if (hasControl(parsed, 'ignore') || (direct && hasControl(parsed, 'keep'))) {
+        hidden.push(child);
+        continue;
+      }
+      if (isContainer(child)) walk(child, false);
+    }
+  };
+  walk(root, true);
+  return hidden;
+}
+
+async function exportRaster(node: SceneNode, ctx: Ctx): Promise<string | undefined> {
+  if (ctx.counter.images >= MAX_IMAGES) {
     ctx.counter.truncated = true;
+    return undefined;
   }
 
-  if (shouldBakeNode(node)) {
-    const imageRef = `img-${ctx.counter.images++}`;
-    if (ctx.counter.images >= MAX_IMAGES) ctx.counter.truncated = true;
+  const hidden = collectHiddenForRaster(node);
+  const previous = hidden.map((child) => Boolean((child as any).visible));
+
+  // Hiding children mutates the document, which would otherwise wake live sync
+  // and re-export in a loop. Suppression is held until the debounced watcher
+  // has drained the resulting change events.
+  if (hidden.length > 0) {
+    suppressingDocumentChanges = true;
+    if (suppressionTimer) {
+      clearTimeout(suppressionTimer);
+      suppressionTimer = null;
+    }
+  }
+
+  try {
+    for (const child of hidden) (child as any).visible = false;
     const png = await node.exportAsync({
       format: 'PNG',
       constraint: { type: 'SCALE', value: ctx.imageScale },
     });
+    const ref = `img-${ctx.counter.images++}`;
     ctx.images.push({
-      ref: imageRef,
+      ref,
       name: `${sanitizeFileName(node.name)}.png`,
       mime: 'image/png',
       dataBase64: base64(png),
     });
-    ctx.odtImages.push({ ref: imageRef, sha256: '', name: `${sanitizeFileName(node.name)}.png` });
-    const baked: OdtNode = {
-      ...baseNode(node),
-      type: mapNodeType(node.type),
-      baked: true,
-      imageRef,
-    };
-    if (isRoot) {
-      baked.x = 0;
-      baked.y = 0;
+    ctx.odtImages.push({ ref, sha256: '', name: `${sanitizeFileName(node.name)}.png` });
+    return ref;
+  } finally {
+    hidden.forEach((child, index) => {
+      (child as any).visible = previous[index];
+    });
+    if (hidden.length > 0) {
+      suppressionTimer = setTimeout(() => {
+        suppressingDocumentChanges = false;
+        suppressionTimer = null;
+      }, 1000);
     }
-    return baked;
+  }
+}
+
+/** Direct children tagged `_keep` survive a forced bake as live instances. */
+async function serializeKeptChildren(node: SceneNode, ctx: Ctx): Promise<OdtNode[]> {
+  if (!isContainer(node)) return [];
+  const kept: OdtNode[] = [];
+  for (const child of (node as any).children as SceneNode[]) {
+    if (!hasControl(parseLayerName(child.name), 'keep')) continue;
+    const serialized = await serializeNode(child, ctx);
+    if (serialized) kept.push(serialized);
+  }
+  return kept;
+}
+
+async function serializeBaked(
+  node: SceneNode,
+  ctx: Ctx,
+  isRoot: boolean,
+): Promise<OdtNode | undefined> {
+  const imageRef = await exportRaster(node, ctx);
+  if (!imageRef) return undefined;
+
+  const baked: OdtNode = {
+    ...baseNode(node),
+    type: mapNodeType(node.type),
+    baked: true,
+    imageRef,
+  };
+  if (isRoot) {
+    baked.x = 0;
+    baked.y = 0;
+  }
+
+  const kept = await serializeKeptChildren(node, ctx);
+  if (kept.length > 0) baked.children = kept;
+  return baked;
+}
+
+async function serializeNode(
+  node: SceneNode,
+  ctx: Ctx,
+  isRoot = false,
+): Promise<OdtNode | undefined> {
+  const parsed = parseLayerName(node.name);
+  if (hasControl(parsed, 'ignore')) return undefined;
+
+  ctx.counter.nodes += 1;
+  if (ctx.counter.nodes > MAX_NODES) {
+    ctx.counter.truncated = true;
   }
 
   if (node.type === 'TEXT') {
     const font = fontForText(node);
     const match = resolveFont(font.family, font.style);
     const complexFill = hasImageFill(node.fills) || hasGradientFill(node.fills);
-    const bake = complexFill || shouldBakeText(ctx.textMode, match);
+    const forceBake = hasControl(parsed, 'bake');
+    // A TextBox must stay editable, so it is live regardless of the mode.
+    const forceLive = hasControl(parsed, 'text') || hasControl(parsed, 'textbox');
+    const bake = forceBake || (!forceLive && (complexFill || shouldBakeText(ctx.textMode, match)));
     const result = await serializeText(node, ctx, bake);
     if (isRoot) {
       result.x = 0;
       result.y = 0;
     }
     return result;
+  }
+
+  if (hasControl(parsed, 'bake') || shouldBakeNode(node)) {
+    const baked = await serializeBaked(node, ctx, isRoot);
+    if (baked) return baked;
+    // The image budget is exhausted. Fall through so the layer still imports
+    // as editable geometry; the converter reports the missing raster.
   }
 
   const paints = 'fills' in node ? (node as any).fills : undefined;
@@ -610,28 +717,24 @@ async function serializeNode(node: SceneNode, ctx: Ctx, isRoot = false): Promise
     const children: OdtNode[] = [];
     for (const child of (node as any).children as SceneNode[]) {
       if (child.type === 'SLICE') continue;
-      children.push(await serializeNode(child, ctx));
+      const serialized = await serializeNode(child, ctx);
+      if (serialized) children.push(serialized);
     }
     if (children.length > 0) result.children = children;
   }
 
   // An instance whose internals are not exposed would otherwise import as an
-  // empty frame; baking preserves what the user sees.
-  if (node.type === 'INSTANCE' && (!result.children || result.children.length === 0)) {
-    const imageRef = `img-${ctx.counter.images++}`;
-    const png = await node.exportAsync({
-      format: 'PNG',
-      constraint: { type: 'SCALE', value: ctx.imageScale },
-    });
-    ctx.images.push({
-      ref: imageRef,
-      name: `${sanitizeFileName(node.name)}.png`,
-      mime: 'image/png',
-      dataBase64: base64(png),
-    });
-    ctx.odtImages.push({ ref: imageRef, sha256: '', name: `${sanitizeFileName(node.name)}.png` });
-    result.baked = true;
-    result.imageRef = imageRef;
+  // empty frame; baking preserves what the user sees. `_frame` opts out.
+  if (
+    node.type === 'INSTANCE' &&
+    (!result.children || result.children.length === 0) &&
+    !hasControl(parsed, 'frame')
+  ) {
+    const imageRef = await exportRaster(node, ctx);
+    if (imageRef) {
+      result.baked = true;
+      result.imageRef = imageRef;
+    }
   }
 
   return result;
@@ -659,15 +762,23 @@ async function buildExport(): Promise<ExportPayload> {
 
   let root: OdtNode;
   if (isContainer(selected)) {
-    root = await serializeNode(selected, ctx, true);
+    const serialized = await serializeNode(selected, ctx, true);
+    if (!serialized) {
+      throw new Error(`"${selected.name}" is tagged _ignore, so there is nothing to export.`);
+    }
+    root = serialized;
   } else {
     const inner = await serializeNode(selected, ctx);
+    if (!inner) {
+      throw new Error(`"${selected.name}" is tagged _ignore, so there is nothing to export.`);
+    }
     inner.x = 0;
     inner.y = 0;
     const box = baseNode(selected);
     root = {
       id: `wrapper:${selected.id}`,
-      rawName: selected.name,
+      // The wrapper is ours, not the authored layer: do not carry its tags.
+      rawName: parseLayerName(selected.name).name,
       type: 'FRAME',
       x: 0,
       y: 0,
@@ -774,6 +885,7 @@ let liveSyncRegistered = false;
 
 function onDocumentChange(): void {
   if (!settings.liveSync) return;
+  if (suppressingDocumentChanges) return;
   if (liveSyncTimer) clearTimeout(liveSyncTimer);
   liveSyncTimer = setTimeout(() => {
     liveSyncTimer = null;

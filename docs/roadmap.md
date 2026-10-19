@@ -4,7 +4,36 @@ This document is the handoff for continuing figrbx in a fresh session. It
 records what exists, what is missing, and the order that avoids rework.
 
 Status at the time of writing: **v0.1.0**, pipeline proven end to end against
-real Figma and Roblox Studio. 39 core tests, 23 bridge tests, Luau lint clean.
+real Figma and Roblox Studio. Phases A–E are implemented; Phases F–H remain:
+114 core tests, 23 bridge tests, Luau lint clean.
+
+### What is left, in order
+
+1. **F2 — non-destructive re-import.** The only remaining item that can destroy
+   user work today: `Materialize.run` deletes the whole GUI before rebuilding.
+2. **F1 — group uploads.** Needs a group id in config and an Open Cloud key
+   whose creator is that group.
+3. **F3–F5 — pairing, auto-sync, delivery confirmation.** Small bridge and
+   plugin work once F2 makes re-import safe.
+4. **F6 — Roblox → Figma.** Largest single feature; do it after F2.
+5. **Phase G — animation runtime.** Largest phase by far; see the batching
+   table. The generated controller is already ~15 KB, so keep the section
+   delimiters and consider splitting helpers before adding all of G.
+6. **Phase H — authoring UX.**
+7. **D2 / D3** — remove the placeholder manifest id before publishing; decide
+   whether to compile the bridge into one executable.
+
+### Known deviations from the original plan
+
+- **Billboard self-contained mode was dropped.** A `LocalScript` inside a
+  Workspace GUI does not run, so a billboard parented to the Part cannot drive
+  the behaviors. World hosts always live in `StarterGui` with `Adornee` set.
+- **Anchor placement is fixed** at `(0, 5, -10)`. Figma designs carry no world
+  coordinates; the user moves the anchor after import.
+- **`_surface` always uses `SizingMode = FixedSize`.** `PixelsPerStud` is not
+  offered.
+- **Older Studio builds** skip `UIShadow` / layout classes rather than
+  emulating them (`Instance.new` is wrapped in `pcall`).
 
 ---
 
@@ -44,11 +73,14 @@ type RbxValue =
   | { t: 'font'; name: string }
   | { t: 'colorsequence'; v: ColorSequencePoint[] }
   | { t: 'numbersequence'; v: NumberSequencePoint[] }
-  | { t: 'vector2'; v: [x, y] };
+  | { t: 'vector2'; v: [x, y] }
+  | { t: 'vector3'; v: [x, y, z] };
 ```
 
 Any new property type must be added here **and** in `props.luau`'s `decode`.
-Anything not in that union will throw at import time.
+Anything not in that union will throw at import time. `RbxNode.controls` carries
+parsed control tags (for example `_nodim`) that later runtime phases will read;
+the Studio plugin ignores fields it does not know.
 
 ### Conversion invariants
 
@@ -73,10 +105,17 @@ cycle.
 | Bridge binding | `localhost` resolves to `::1` before `127.0.0.1` on Windows/macOS, so the bridge listens on **both**. Do not revert to a single `+ hostname`. |
 | `documentAccess: dynamic-page` | `figma.on('documentchange')` throws unless `figma.loadAllPagesAsync()` was awaited first. Registration is therefore lazy, inside `enableLiveSync()`. |
 | `UIStroke.Thickness` | Pixels, not scale. A stroke does not grow with the frame. |
-| Text | `TextScaled = true` is currently **always** set. See decision D1. |
+| Text | `TextScaled` is off by default; `_fit` opts in. See D1. |
 | Re-import | `Materialize.run` destroys any `ScreenGui` whose `figrbxCode` attribute matches. User-added children are lost. See F2. |
 | Group uploads | `ImageUploader.creatorField()` only ever returns `{ userId }`. See F1. |
 | Lune / selene | The `~/.rokit/bin` shims fail with "Failed to find tool in any project manifest". Use the tool-storage paths in §6. |
+| Live sync vs. rasters | Exporting a `_image` layer temporarily hides `_keep` / `_ignore` children, which mutates the document. `exportRaster` suppresses the change watcher for 1 s; without that, live sync re-exports in a loop. |
+| World hosts | A `LocalScript` inside a GUI parented to a `Part` does not run. World hosts must stay in `StarterGui` with `Adornee` set, or every behavior silently stops working. |
+| `BillboardGui.Size` | Scale components are relative to the **adornee**, so the anchor part is 1×1×1 and the stud width lives in `Size`. `SurfaceGui.CanvasSize` is pixels, not studs. |
+| `UIShadow` units | `Offset` / `Spread` are `UDim2` and `BlurRadius` is `UDim`; the converter writes scales so the shadow tracks the layout. `Inset` has no effect in `Text` mode. |
+| `Instance.new` | New UI classes are not present in every Studio build. `materialize.luau` wraps creation in `pcall` and skips the node; do not replace it with a direct call. |
+| `GuiObject.Active` | Defaults to **false** on GuiObjects, so `Active == false` is not a disabled signal. `_disabled` uses `Interactable` and the `figrbxDisabled` attribute instead. |
+| `_keep` scope | Only **direct** children of a baked layer survive as instances, so only direct `_keep` children are hidden from the raster. A deeper `_keep` tag is ignored (and the layer stays in the image). |
 | Tests | `packages/core/tsconfig.json` has `noEmit`; the build uses `tsconfig.build.json`. Do not merge them (test files fall outside `rootDir`). |
 
 ---
@@ -84,11 +123,22 @@ cycle.
 ## 3. What ships today
 
 Supported tags: `_button`, `_scroll`, `_panel`, `_close`, `_closed`, `_open:Name`,
-`_tab:Group`, `_page:Group`, and `{Attr}` bindings.
+`_toggle:Name`, `_close:Name`, `_exit`, `_tab:Group`, `_tab` (inside
+`_tabgroup`), `_tabgroup`, `_page:Group`, `_hover`, `_clicked`, `_default`,
+`_disabled`, `_active`, `_select`, and `{Attr}` bindings.
 
-Supported output: `ScreenGui`, `Frame`, `TextLabel`, `TextButton`, `ImageLabel`,
-`ImageButton`, `ScrollingFrame`, `CanvasGroup`, `UICorner`, `UIStroke`,
-`UIGradient`, `UIAspectRatioConstraint`.
+Control tags: `_ignore`; `_image` / `_img` / `_lock` / `#Name` / `img:Name`;
+`_frame`; `_txt`; `_keep`; `_fit`; `_aspect`; `_canvas`; `_list`; `_grid`;
+`_nolist`; `_textbox` / `_input`; `_nodim`.
+
+Root host tags: `_billboard`, `_surface`, `_prompt` (optional width in studs).
+`_hold` fills a stroke during a prompt hold.
+
+Supported output: `ScreenGui`, `BillboardGui`, `SurfaceGui`, `Frame`,
+`TextLabel`, `TextButton`, `TextBox`, `ImageLabel`, `ImageButton`,
+`ScrollingFrame`, `CanvasGroup`, `UICorner`, `UIStroke`, `UIGradient`,
+`UIShadow`, `UIListLayout`, `UIGridLayout`, `UIAspectRatioConstraint`,
+`ProximityPrompt`.
 
 ---
 
@@ -98,6 +148,13 @@ Ordered so that later work does not have to be redone. Each unit lists the files
 it touches and how to prove it works.
 
 ### Phase A — Bake and control tags (do first)
+
+**Status: done.** Implementation notes: `_keep`
+(and `_ignore`) is honoured while an ancestor raster is exported by hiding
+those children in Figma and restoring visibility afterwards; `_frame` cannot
+un-bake a vector or text layer, so that case warns; `_image` wins over `_txt` /
+`_frame` / `_scroll` when tags conflict, with a warning. Drop and inner shadows
+now import as `UIShadow` (no tag required); only blur remains a warning.
 
 These change the conversion pipeline itself. Everything later depends on the
 converter being able to decide *per layer* what becomes what.
@@ -131,10 +188,18 @@ to bake to an image.
 **A7. `_aspect`, `_canvas`, `_nodim`, `_nolist`** — direct control tags.
 - `_aspect` → `UIAspectRatioConstraint` on any node, not just root.
 - `_canvas` → force `CanvasGroup` even at opacity 1.
-- `_nodim` needs the hover-dim runtime first (Phase C/G); add the tag parsing
-  now, wire it later.
+- `_nodim` opts a button out of the default hover dim (wired in the controller).
 
 ### Phase B — Layout
+
+**Status: B1–B3 done.** Implementation notes:
+layout children move under a child `Items` frame; `_list` auto-detects three or
+more children with identical gaps and a shared edge (`_nolist` opts out, with a
+warning explaining the automatic result); `_grid` requires equal cell sizes,
+aligned columns/rows, and only the last row may be short. Layout tags on the
+root frame or on a baked image warn and fall back to absolute positions.
+`_textbox` / `_input` on a frame applies to its first visible direct text child;
+the drawn text becomes `PlaceholderText`, the field starts empty, bindings warn.
 
 **B1. `_list` → `UIListLayout`**
 - `convert.ts`: new `convertWithLayout()`. Detect direction from stacking axis,
@@ -161,6 +226,14 @@ to bake to an image.
 
 ### Phase C — Interaction
 
+**Status: Phase C done.** `_open` now shows a panel (it no longer toggles);
+`_toggle:Name` toggles; `_close:Name` hides a named panel; `_exit` disables the
+ScreenGui. Tabs and pages pair by their nearest `_tabgroup`; bare `_tab` /
+`_page` work inside one. State layers are hidden at import and driven by a
+generated controller; `_select` tweens a `UIStroke` and exposes `FWSelected`;
+`_lean` / `_magnet` follow the pointer; `_nopointer` and `_nodim` opt out of
+hover effects, and other buttons dim on hover by default.
+
 **C1. Parameterised actions** — `_toggle:Name`, `_close:Name`, `_exit` alias.
 - `tags.ts`: extend `BehaviorKind`; keep `_open` requiring its parameter.
 - `behaviors.luau`: extend the generated controller.
@@ -174,7 +247,9 @@ to bake to an image.
 - These are *layers inside their owning button*. Converter marks them hidden and
   records which button owns them.
 - Runtime swaps visibility on `MouseEnter`/`MouseLeave`/`InputBegan`/`InputEnded`,
-  and watches `Interactable`/`Active` for `_disabled`.
+  and watches `Interactable` for `_disabled`.
+- `_disabled` also follows the `figrbxDisabled` attribute. `Active` is **not**
+  used: it defaults to false on GuiObjects and would mark every button disabled.
 - `_default` hides whenever any variant shows.
 
 **C4. `_select`** — one live choice at a time; outline animates in; expose
@@ -183,6 +258,11 @@ to bake to an image.
 **C5. `_lean`, `_magnet`, `_nopointer`** — pointer-reactive, need the runtime.
 
 ### Phase D — Live data
+
+**Status: Phase D done.** Bindings resolve against the local player, prefer
+`leaderstats`, and keep the ScreenGui-attribute fallback so existing imports
+keep working. `_bind:path` replaces the whole label; dotted paths poll every
+half second because arbitrary descendants have no change signal.
 
 **D1. Binding grammar**
 
@@ -207,6 +287,15 @@ paths resolve on refresh.
 
 ### Phase E — Placement hosts
 
+**Status: E1–E3 done, with one deviation.** The importer creates an invisible
+anchor `Part` under `Workspace/figrbx` at a fixed `(0, 5, -10)` and adorns a
+StarterGui-copied GUI to it. Self-contained mode (GUI parented to the Part) was
+not implemented because a `LocalScript` inside a Workspace GUI does not run;
+Adornee-from-StarterGui is the only placement where the generated controller
+works. Widths come from the tag (`_billboard:12`); `_prompt` uses a
+`BillboardGui` with a custom-style prompt, and `_hold` sweeps a gradient on the
+target stroke over the prompt's hold time.
+
 The root frame may currently only become a `ScreenGui`. Add a root-host
 selector driven by a root tag.
 
@@ -227,6 +316,8 @@ selector driven by a root tag.
 Only one root host tag may be used; warn otherwise.
 
 ### Phase F — Pipeline
+
+**Status: not started. F2 first.**
 
 **F1. Group uploads**
 - `ImageUploader.creatorField()` returns `{ groupId }` when configured.
@@ -260,6 +351,9 @@ Figma shows "delivered" rather than "sent".
 
 ### Phase G — Animation runtime
 
+**Status: not started.** `_lean`, `_magnet`, and `_hold` from the old plan are
+already implemented in the interaction phase; the rest below is open.
+
 This is where most of the commercial product's perceived value lives, and it is
 the largest chunk by far. Every tag generates a `LocalScript` and every tag has
 tuning parameters.
@@ -277,8 +371,11 @@ Group them so each batch shares test infrastructure:
 | 3D | `_3d`, `_tilt` | move the layer onto a world surface |
 | Overlay | `_card`, `_pointer` | screen-space follow |
 
-`_shadow` is not animation: it maps to a real `UIShadow` instance and should be
-done early (with Phase A) because it removes a currently-always-dropped effect.
+Shadows are not animation: Figma drop and inner shadows now map to real
+`UIShadow` instances, done with Phase A because it removed a
+currently-always-dropped effect. Text layers use `ApplyShadowMode.Text`; inner
+text shadows are skipped with a warning because inset has no effect in that
+mode.
 
 **Design requirement:** the generated controller must stay readable and
 regenerable. `behaviors.luau` builds source text today; keep that approach
@@ -286,6 +383,8 @@ regenerable. `behaviors.luau` builds source text today; keep that approach
 shared runtime module, so imports stay self-contained.
 
 ### Phase H — Authoring UX
+
+**Status: not started.**
 
 Lower priority, but these are what make the product feel finished.
 
@@ -308,13 +407,11 @@ subscription business figrbx does not have.
 
 ## 5. Decisions to settle before starting
 
-**D1 — `TextScaled` default.**
-We set `TextScaled = true` on every text layer. The commercial product does the
-opposite: default keeps the design's point size, and `_fit` opts into
-`TextScaled`. Their reasoning is sound — an auto-width label has no box to fit,
-and `TextScaled` silently changes typography. Recommended: match them, set
-`TextScaled` only under `_fit`, and treat the current behaviour as a bug to fix
-in A6. This will change how existing imports look.
+**D1 — `TextScaled` default. Settled: match the commercial product.**
+Text layers now emit `TextSize = fontSize` with `TextScaled = false`; `_fit`
+opts into `TextScaled`. The commercial product does the same, and the reasoning
+is sound — an auto-width label has no box to fit, and `TextScaled` silently
+changes typography. This changes how existing imports look.
 
 **D2 — Iframe size.**
 `manifest.json` has `"id": "figrbx-figma-plugin"`, a placeholder. Figma assigns
@@ -332,7 +429,7 @@ for everything except codes and live sync.
 
 ```bash
 # every change
-pnpm test                 # 39 core + 23 bridge
+pnpm test                 # 114 core + 23 bridge
 pnpm typecheck
 pnpm lint                 # biome
 pnpm build                # core, bridge, figma plugin

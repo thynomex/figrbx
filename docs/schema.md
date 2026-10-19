@@ -34,7 +34,7 @@ explains the intent behind each part.
 ```jsonc
 {
   "id": "1:23",              // Figma node id, stable within a document
-  "rawName": "Shop_button",  // authored name, behavior tags included
+  "rawName": "Shop_button",  // authored name, behavior and control tags included
   "type": "FRAME",
   "x": 40, "y": 90,          // relative to the parent's top-left, design px
   "w": 200, "h": 56,
@@ -54,6 +54,39 @@ explains the intent behind each part.
   "children": [ /* OdtNode, bottom to top paint order */ ]
 }
 ```
+
+A `baked` node may still carry `children`; those are the layers tagged
+`_keep`. The raster already contains every other child, so the converter
+imports only the kept ones as live instances. Whole layers tagged `_ignore`
+never reach the document at all.
+
+## Converted document
+
+The bridge turns ODT into an `RbxDocument`: a typed tree of Roblox class names
+and encoded property values, plus the place it should live.
+
+```jsonc
+{
+  "version": 1,
+  "screenGui": { /* LayerCollector node: ScreenGui, BillboardGui, SurfaceGui */ },
+  "host": {
+    "kind": "screen" | "billboard" | "surface" | "prompt",
+    "studs": 12,                       // world hosts only
+    "anchor": {                        // world hosts only
+      "name": "Sign Anchor",
+      "size": [1, 1, 1],
+      "position": [0, 5, -10]
+    },
+    "prompt": { /* ProximityPrompt node, _prompt host only */ }
+  },
+  "warnings": ["…"]
+}
+```
+
+The Studio side creates the anchor part under `Workspace/figrbx`, copies the
+GUI to `StarterGui`, and sets `Adornee` to the anchor. Encoded values use the
+`RbxValue` union in `packages/core/src/convert.ts`; every new tag must be added
+there **and** in `studio-plugin/src/props.luau`.
 
 Positions are parent-relative and pre-rotation. The Figma plugin obtains them
 from absolute bounding boxes and subtracts the parent origin, which means

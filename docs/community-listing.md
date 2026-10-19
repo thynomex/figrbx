@@ -47,17 +47,24 @@ design for.
 WHAT YOU GET
 • Positions and sizes as Scale, with a root UIAspectRatioConstraint
 • Corner radii kept proportional
-• Solid fills, linear gradients, strokes and opacity
+• Solid fills, linear gradients, strokes, opacity, and native drop/inner shadows
 • Text mapped to the closest built-in Roblox font
 • Image fills and vector layers uploaded to your own Roblox account
 • Behaviour from layer names: _button, _scroll, _panel, _close, _open:Name,
-  _tab:Group, _page:Group, plus {Attribute} bindings for live values
+  _toggle:Name, _close:Name, _exit, _tabgroup with _tab / _page, button state
+  layers (_hover, _clicked, _default, _disabled, _active), _select, _lean,
+  _magnet, _nopointer, plus {Coins} / {attr:Rank} / {PlayerName} and
+  _bind:path bindings for live values
+• World hosts: _billboard, _surface, and _prompt with a custom ProximityPrompt
+  and _hold stroke fill
+• Control tags: _ignore, _image / #Name / img:Name, _frame, _txt, _keep, _fit,
+  _aspect, _canvas, _list, _grid, _nolist, _input / _textbox
 • Every approximation reported in the plugin, never silently dropped
 
 WHAT DOES NOT TRANSFER
-Blend modes, auto-layout reflow, Figma constraints and backdrop blur have no
-Roblox equivalent. Rotation, per-corner radii, radial gradients and drop
-shadows are approximated and listed in the export report.
+Blend modes, auto-layout reflow, Figma constraints and blur have no Roblox
+equivalent. Rotation, per-corner radii and radial gradients are approximated and
+listed in the export report.
 
 BOTH PLUGINS ARE OPEN SOURCE (MIT)
 The Figma plugin, the converter, and the Roblox Studio plugin live at
